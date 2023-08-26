@@ -30,10 +30,9 @@
 // under the License.
 //
 
-#include <iostream>
-
 #include <glog/logging.h>
 
+#include "yb/cdc/cdc_server_options.h"
 #include "yb/common/wire_protocol.h"
 
 #include "yb/consensus/log_util.h"
@@ -41,6 +40,7 @@
 
 #include "yb/gutil/sysinfo.h"
 
+#include "yb/master/cdc_master_server.h"
 #include "yb/master/master_call_home.h"
 #include "yb/master/master.h"
 #include "yb/master/sys_catalog_initialization.h"
@@ -148,6 +148,13 @@ static int MasterMain(int argc, char** argv) {
 
   LOG(INFO) << "Master server successfully started.";
 
+  yb::cdcserver::CDCServerOptions cdc_mserver_options(7200);
+  cdc_mserver_options.dump_info_path = "";
+  cdc_mserver_options.rpc_opts.rpc_bind_addresses = "0.0.0.0:7200";
+  std::unique_ptr<yb::cdcserver::CDCMasterServer> cdc_master_server =
+      std::make_unique<cdcserver::CDCMasterServer>(&server, cdc_mserver_options);
+  LOG_AND_RETURN_FROM_MAIN_NOT_OK(cdc_master_server->Start());
+
   std::unique_ptr<MasterCallHome> call_home;
   call_home = std::make_unique<MasterCallHome>(&server);
   call_home->ScheduleCallHome();
@@ -169,8 +176,8 @@ static int MasterMain(int argc, char** argv) {
 
   call_home.reset();
 
+  cdc_master_server->Shutdown();
   server.Shutdown();
-
   return EXIT_SUCCESS;
 }
 
