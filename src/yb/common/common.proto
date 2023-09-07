@@ -597,7 +597,7 @@ message DatumMessagePB {
     int64 pg_type = 12;
   }
   oneof cdc_datum {
-    PgDatumPB pg_value = 13;
+    QLValuePB pg_value = 13;
     QLValuePB cql_value = 14;
   }
 }

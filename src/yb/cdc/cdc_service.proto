@@ -387,7 +387,7 @@ message RowMessage {
   optional uint64 record_time = 14;
 
   // docdb table id
-  optional string table_id = 14;
+  optional string table_id = 15;
 }
 
 message CDCSDKProtoRecordPB {

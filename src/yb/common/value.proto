@@ -28,7 +28,7 @@ message QLMapValuePB {
   repeated QLValuePB values = 2;
 }
 
-message DatumMessagePB {
+message TempDatumMessagePB {
   optional string column_name = 1;
   optional int64 column_type = 2;
   oneof datum {

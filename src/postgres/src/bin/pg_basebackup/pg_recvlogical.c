@@ -993,6 +993,7 @@ main(int argc, char **argv)
 		if (!CreateReplicationSlot(conn, replication_slot, plugin, false,
 								   false, false, slot_exists_ok))
 			disconnect_and_exit(1);
+		fprintf(stderr, _("Sid: Slot creation succesfull"));
 		startpos = InvalidXLogRecPtr;
 	}
 

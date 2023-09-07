@@ -1426,8 +1426,12 @@ YBCStatus YBCPgValidatePlacement(const char *placement_info) {
   return ToYBCStatus(pgapi->ValidatePlacement(placement_info));
 }
 
-YBCStatus YBCPgCDCGetChanges(YBCGetChangesResponse* response) {
-  return ToYBCStatus(pgapi->CDCGetChanges(response));
+YBCStatus YBCPgCDCSetCheckpoint() {
+  return ToYBCStatus(pgapi->CDCSetCheckpoint());
+}
+
+YBCStatus YBCPgCDCGetChanges(YBCCDCSDKCheckpoint* cdcsdk_checkpoint,YBCGetChangesResponse* response) {
+  return ToYBCStatus(pgapi->CDCGetChanges(cdcsdk_checkpoint, response));
 }
 
 // YBCGetChangesResponse YBCPgCDCGetChanges() {

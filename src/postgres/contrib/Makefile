@@ -48,7 +48,6 @@ SUBDIRS = \
 		tablefunc	\
 		tcn		\
 		test_decoding	\
-		wal2json	\
 		tsm_system_rows \
 		tsm_system_time \
 		unaccent	\
