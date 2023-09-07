@@ -454,6 +454,7 @@ Result<string> WritePgHbaConfig(const PgProcessConf& conf) {
   if (lines.empty()) {
     LOG(WARNING) << "No hba configuration lines found, defaulting to trust all configuration.";
     lines.push_back("host all all all trust");
+    lines.push_back("local all all trust");
   }
 
   // Add comments to the hba config file noting the internally hardcoded config line.

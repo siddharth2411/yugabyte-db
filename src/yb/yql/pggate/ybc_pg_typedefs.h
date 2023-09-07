@@ -496,6 +496,30 @@ typedef enum PgSysTablePrefetcherCacheMode {
   YB_YQL_PREFETCHER_NO_CACHE
 } YBCPgSysTablePrefetcherCacheMode;
 
+
+typedef struct DatumMessage {
+  const char* column_name;
+  long column_type;
+  // const char* ql_value_str; 
+  uint64_t datum;
+  bool is_null; 
+} YBCDatumMessage;
+
+typedef struct RowMessage {
+  int col_count;
+  YBCDatumMessage* cols;
+  uint64_t commit_time;
+  uint32_t transaction_id;
+  const char* action;
+  // const char* table_name;
+  uint32_t table_oid;
+} YBCRowMessage;
+
+typedef struct GetChangesResponse {
+  int row_count;
+  YBCRowMessage* rows;
+} YBCGetChangesResponse;
+
 #ifdef __cplusplus
 }  // extern "C"
 #endif  // __cplusplus
