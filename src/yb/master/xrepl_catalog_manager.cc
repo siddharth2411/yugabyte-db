@@ -1165,6 +1165,7 @@ Status CatalogManager::AddTabletEntriesToCDCSDKStreamsForNewTables(
 
       for (const auto& tablet : tablets) {
         cdc::CDCStateTableEntry entry(tablet.tablet_id(), stream->StreamId());
+        LOG(INFO) <<"Sid: Tablet ID: "<<tablet.tablet_id();
         entry.checkpoint = OpId::Invalid();
         entry.active_time = 0;
         entry.cdc_sdk_safe_time = 0;

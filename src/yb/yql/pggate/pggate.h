@@ -690,7 +690,8 @@ class PgApiImpl {
   // Using this function instead of GetRootMemTracker allows us to avoid copying a shared_pointer
   int64_t GetRootMemTrackerConsumption() { return MemTracker::GetRootTrackerConsumption(); }
 
-  CHECKED_STATUS CDCGetChanges(YBCGetChangesResponse* response);
+  Status CDCSetCheckpoint();
+  Status CDCGetChanges(YBCCDCSDKCheckpoint* cdcsdk_checkpoint, YBCGetChangesResponse* response);
   // Result<YBCGetChangesResponse> CDCGetChanges();
 
  private:

@@ -65,6 +65,7 @@
 #include "libpq/pqformat.h"
 #include "miscadmin.h"
 #include "nodes/replnodes.h"
+#include "pg_yb_utils.h"
 #include "pgstat.h"
 #include "replication/basebackup.h"
 #include "replication/decode.h"
@@ -207,6 +208,8 @@ static volatile sig_atomic_t replication_active = false;
 static LogicalDecodingContext *logical_decoding_ctx = NULL;
 static XLogRecPtr logical_startptr = InvalidXLogRecPtr;
 
+bool called_set_checkpt = false;
+YBCCDCSDKCheckpoint cdc_sdk_checkpoint;
 /* A sample associating a WAL location with the time it was written. */
 typedef struct
 {
@@ -1530,6 +1533,7 @@ exec_replication_command(const char *cmd_string)
 			break;
 
 		case T_CreateReplicationSlotCmd:
+			ereport(LOG, (errmsg("Sid: CreateReplicationSlot")));
 			CreateReplicationSlot((CreateReplicationSlotCmd *) cmd_node);
 			break;
 
@@ -1545,8 +1549,10 @@ exec_replication_command(const char *cmd_string)
 
 				if (cmd->kind == REPLICATION_KIND_PHYSICAL)
 					StartReplication(cmd);
-				else
+				else {
+					ereport(LOG, (errmsg("Sid: StartLogicalReplication")));
 					StartLogicalReplication(cmd);
+				}
 				break;
 			}
 
@@ -2784,9 +2790,9 @@ static enum ReorderBufferChangeType ToReorderBufferChangeType(const char* v)
 static void
 XLogSendLogical(void)
 {
-	XLogRecord *record;
-	char	   *errm;
-	// elog(INFO, "Inside XLogSendLogical");
+	// XLogRecord *record;
+	// char	   *errm;
+	ereport(LOG, (errmsg("Sid: Inside XLogSendLogical")));
 	
 	ReorderBufferTXN *txn = (ReorderBufferTXN *) palloc(sizeof(ReorderBufferTXN));
 	// txn->xid = 123;
@@ -2795,21 +2801,34 @@ XLogSendLogical(void)
 	logical_decoding_ctx->write_location = 0;
 	// logical_decoding_ctx->callbacks.begin_cb(logical_decoding_ctx, txn);
 
-	YBCGetChangesResponse response;
-	HandleYBStatus(YBCPgCDCGetChanges(&response));
-
-	// elog(INFO, "Row counts: %d", response.row_count);
-	StartTransactionCommand();
 	
+	if(!called_set_checkpt) {
+		called_set_checkpt = true;
+		ereport(LOG, (errmsg("Sid: calling YBCPgCDCSetCheckpoint")));
+		HandleYBStatus(YBCPgCDCSetCheckpoint());
+	}
+
+	YBCGetChangesResponse response;
+	ereport(LOG, (errmsg("Sid: calling YBCPgCDCGetChanges")));
+	HandleYBStatus(YBCPgCDCGetChanges(&cdc_sdk_checkpoint, &response));
+	cdc_sdk_checkpoint = *(response.checkpoint);
+	ereport(LOG, (errmsg("Sid: Checkpoint values: index: %lld, term: %lld, key: %s, write_id: %d", cdc_sdk_checkpoint.index, cdc_sdk_checkpoint.term, cdc_sdk_checkpoint.key, cdc_sdk_checkpoint.write_id)));
+
+
+	ereport(LOG, (errmsg("Sid: Row counts: %d", response.row_count)));
+	StartTransactionCommand();
 	for (int i = 0; i < response.row_count; i++) {
 		YBCRowMessage row = response.rows[i];
-		// elog(INFO, "For %d row, col counts: %d", i, row.col_count);
+		ereport(LOG, (errmsg("Sid: For %d row, col counts: %d", i, row.col_count)));
 
+		ereport(LOG, (errmsg("Sid: Table OID: %d", row.table_oid)));
 		Relation relation = RelationIdGetRelation(row.table_oid);
+		ereport(LOG, (errmsg("Sid: got relation")));
 		TupleDesc tupdesc = RelationGetDescr(relation);
+		ereport(LOG, (errmsg("Sid: got tupdesc")));
 
 		int num_attributes = tupdesc->natts;
-		// elog(INFO, "Num attributes %d", num_attributes);
+		ereport(LOG, (errmsg("Sid: Num attributes %d", num_attributes)));
 		// Datum datums[row.col_count];
 		// bool is_nulls[row.col_count];
 		Datum datums[num_attributes];
@@ -2817,15 +2836,15 @@ XLogSendLogical(void)
 
 		for (int j = 0; j < row.col_count; j++) {
 			YBCDatumMessage col = row.cols[j];
-			// elog(INFO, "Processing column %d: name %s, type: %d datum: %lld is_null: %d", j, col.column_name, (Oid) col.column_type, col.datum, col.is_null);
+			ereport(LOG, (errmsg("Sid: Processing column %d: name %s, type: %d datum: %lld is_null: %d", j, col.column_name, (Oid) col.column_type, col.datum, col.is_null)));
 			int k = 0;
 			for(k = 0; k < num_attributes; k++) {
-				// elog(INFO, "Looking up attribute %d with name %s", k, tupdesc->attrs[k].attname.data);
+				ereport(LOG, (errmsg("Looking up attribute %d with name %s", k, tupdesc->attrs[k].attname.data)));
 				if (!strcmp(tupdesc->attrs[k].attname.data, col.column_name)) break;
 			}
 			
 			if (k == num_attributes) {
-				elog(INFO, "Could not find with name %s in pg attributes", col.column_name);
+				ereport(LOG, (errmsg("Sid: Could not find with name %s in pg attributes", col.column_name)));
 				continue;
 			}
 			datums[k] = col.datum;
@@ -2856,19 +2875,20 @@ XLogSendLogical(void)
 
 		txn->xid = row.transaction_id;
 
-		elog(INFO, "Processing action: %s", row.action);
-
+		ereport(LOG, (errmsg("Sid: Processing action: %s", row.action)));
+		
 		if (!strcmp(row.action, "BEGIN")) {
-			// elog(INFO, "Begin CB");
+			elog(INFO, "\nGetChanges()");
+			ereport(LOG, (errmsg("Sid: Begin CB")));
 			logical_decoding_ctx->callbacks.begin_cb(logical_decoding_ctx, txn);
 		}
 		else if (!strcmp(row.action, "COMMIT")) {
-			// elog(INFO, "Commit CB");
+			ereport(LOG, (errmsg("Commit CB")));
 			txn->commit_time = row.commit_time;
 			logical_decoding_ctx->callbacks.commit_cb(logical_decoding_ctx, txn, 0);
 		}
 		else if (!strcmp(row.action, "INSERT") || !strcmp(row.action, "UPDATE") || !strcmp(row.action, "DELETE")) {
-			// elog(INFO, "Change CB");
+			ereport(LOG, (errmsg("Sid: Change CB: %s", row.action)));
 			ReorderBufferChange *change = (ReorderBufferChange *) palloc(sizeof(ReorderBufferChange));
 			change->action = ToReorderBufferChangeType(row.action);
 			HeapTuple head_tuple = heap_form_tuple(tupdesc, datums, is_nulls);
@@ -2879,10 +2899,11 @@ XLogSendLogical(void)
 			logical_decoding_ctx->callbacks.change_cb(logical_decoding_ctx, txn, relation, change);
 		}
 		else {
-			elog(INFO, "Unsupported action: %s", row.action);
+			ereport(LOG, (errmsg("Sid: Unsupported action: %s", row.action)));
 		}
 	}
 	AbortCurrentTransaction();
+	sleep(5);
 
 	// Relation relation = RelationIdGetRelation(16384);
 	// logical_decoding_ctx->callbacks.change_cb(logical_decoding_ctx, txn, relation, change);
@@ -2903,67 +2924,67 @@ XLogSendLogical(void)
 	 * true if XLogReadRecord() had to stop reading but WalSndWaitForWal
 	 * didn't wait - i.e. when we're shutting down.
 	 */
-	WalSndCaughtUp = false;
+	// WalSndCaughtUp = false;
 	// elog(INFO, "XLogSendLogical: before reading record");
-	record = XLogReadRecord(logical_decoding_ctx->reader, logical_startptr, &errm);
+	// record = XLogReadRecord(logical_decoding_ctx->reader, logical_startptr, &errm);
 	// elog(INFO, "XLogSendLogical: after reading record");
-	logical_startptr = InvalidXLogRecPtr;
+	// logical_startptr = InvalidXLogRecPtr;
 
 	/* xlog record was invalid */
-	if (errm != NULL)
-		elog(ERROR, "%s", errm);
+	// if (errm != NULL)
+	// 	elog(ERROR, "%s", errm);
 
-	if (record != NULL)
-	{
-		/* XXX: Note that logical decoding cannot be used while in recovery */
-		XLogRecPtr	flushPtr = GetFlushRecPtr();
+	// if (record != NULL)
+	// {
+	// 	/* XXX: Note that logical decoding cannot be used while in recovery */
+	// 	XLogRecPtr	flushPtr = GetFlushRecPtr();
 
-		/*
-		 * Note the lack of any call to LagTrackerWrite() which is handled by
-		 * WalSndUpdateProgress which is called by output plugin through
-		 * logical decoding write api.
-		 */
-		// elog(INFO, "XLogSendLogical: before decoding");
-		LogicalDecodingProcessRecord(logical_decoding_ctx, logical_decoding_ctx->reader);
-		// elog(INFO, "XLogSendLogical: after decoding");
-		sentPtr = logical_decoding_ctx->reader->EndRecPtr;
+	// 	/*
+	// 	 * Note the lack of any call to LagTrackerWrite() which is handled by
+	// 	 * WalSndUpdateProgress which is called by output plugin through
+	// 	 * logical decoding write api.
+	// 	 */
+	// 	// elog(INFO, "XLogSendLogical: before decoding");
+	// 	LogicalDecodingProcessRecord(logical_decoding_ctx, logical_decoding_ctx->reader);
+	// 	// elog(INFO, "XLogSendLogical: after decoding");
+	// 	sentPtr = logical_decoding_ctx->reader->EndRecPtr;
 
-		/*
-		 * If we have sent a record that is at or beyond the flushed point, we
-		 * have caught up.
-		 */
-		if (sentPtr >= flushPtr)
-			WalSndCaughtUp = true;
-	}
-	else
-	{
+	// 	/*
+	// 	 * If we have sent a record that is at or beyond the flushed point, we
+	// 	 * have caught up.
+	// 	 */
+	// 	if (sentPtr >= flushPtr)
+	// 		WalSndCaughtUp = true;
+	// }
+	// else
+	// {
 		/*
 		 * If the record we just wanted read is at or beyond the flushed
 		 * point, then we're caught up.
 		 */
-		if (logical_decoding_ctx->reader->EndRecPtr >= GetFlushRecPtr())
-		{
-			WalSndCaughtUp = true;
+	// 	if (logical_decoding_ctx->reader->EndRecPtr >= GetFlushRecPtr())
+	// 	{
+	// 		WalSndCaughtUp = true;
 
-			/*
-			 * Have WalSndLoop() terminate the connection in an orderly
-			 * manner, after writing out all the pending data.
-			 */
-			if (got_STOPPING)
-				got_SIGUSR2 = true;
-		}
-	}
+	// 		/*
+	// 		 * Have WalSndLoop() terminate the connection in an orderly
+	// 		 * manner, after writing out all the pending data.
+	// 		 */
+	// 		if (got_STOPPING)
+	// 			got_SIGUSR2 = true;
+	// 	}
+	// }
 
-	/* Update shared memory status */
-	{
-		WalSnd	   *walsnd = MyWalSnd;
+	// /* Update shared memory status */
+	// {
+	// 	WalSnd	   *walsnd = MyWalSnd;
 
-		SpinLockAcquire(&walsnd->mutex);
-		walsnd->sentPtr = sentPtr;
-		SpinLockRelease(&walsnd->mutex);
-	}
+	// 	SpinLockAcquire(&walsnd->mutex);
+	// 	walsnd->sentPtr = sentPtr;
+	// 	SpinLockRelease(&walsnd->mutex);
+	// }
 
-	// elog(INFO, "Returning from XLogSendLogical");
+	ereport(LOG, (errmsg("Returning from XLogSendLogical")));
 }
 
 /*

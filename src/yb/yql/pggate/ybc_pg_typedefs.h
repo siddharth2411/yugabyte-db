@@ -515,10 +515,22 @@ typedef struct RowMessage {
   uint32_t table_oid;
 } YBCRowMessage;
 
+typedef struct CDCSDKCheckpoint {
+  int64_t term;
+  int64_t index;
+  const char* key;
+  int32_t write_id;
+
+} YBCCDCSDKCheckpoint;
+
 typedef struct GetChangesResponse {
   int row_count;
   YBCRowMessage* rows;
+  YBCCDCSDKCheckpoint* checkpoint;
 } YBCGetChangesResponse;
+
+
+
 
 #ifdef __cplusplus
 }  // extern "C"
