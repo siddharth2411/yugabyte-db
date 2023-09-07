@@ -409,7 +409,7 @@ Result<string> WritePostgresConfig(const PgProcessConf& conf) {
 
   // Add shared_preload_libraries to the ysql_pg.conf.
   lines.push_back(Format("shared_preload_libraries='$0'", boost::join(metricsLibs, ",")));
-
+  lines.push_back(Format("wal_level=logical"));
   if (conf.enable_tls) {
     lines.push_back("ssl=on");
     lines.push_back(Format("ssl_cert_file='$0/node.$1.crt'",
