@@ -706,6 +706,10 @@ YBCStatus YBCIsObjectPartOfXRepl(YBCPgOid database_oid, YBCPgOid table_oid,
 
 YBCStatus YBCPgCancelTransaction(const unsigned char* transaction_id);
 
+YBCStatus YBCPgCDCGetChanges(YBCGetChangesResponse* response);
+
+// YBCGetChangesResponse YBCPgCDCGetChanges();
+
 #ifdef __cplusplus
 }  // extern "C"
 #endif

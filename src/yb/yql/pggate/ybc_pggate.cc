@@ -1426,6 +1426,14 @@ YBCStatus YBCPgValidatePlacement(const char *placement_info) {
   return ToYBCStatus(pgapi->ValidatePlacement(placement_info));
 }
 
+YBCStatus YBCPgCDCGetChanges(YBCGetChangesResponse* response) {
+  return ToYBCStatus(pgapi->CDCGetChanges(response));
+}
+
+// YBCGetChangesResponse YBCPgCDCGetChanges() {
+//   return pgapi->CDCGetChanges().get();
+// }
+
 // Referential Integrity Caching
 YBCStatus YBCPgForeignKeyReferenceCacheDelete(const YBCPgYBTupleIdDescriptor *source) {
   return ProcessYbctid(*source, [](auto table_id, const auto& ybctid){

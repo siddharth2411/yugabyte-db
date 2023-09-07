@@ -54,6 +54,7 @@
 #include "yb/yql/pggate/pg_sys_table_prefetcher.h"
 #include "yb/yql/pggate/pg_tools.h"
 #include "yb/yql/pggate/ybc_pg_typedefs.h"
+#include "yb/cdc/cdc_service.pb.h"
 
 namespace yb {
 namespace pggate {
@@ -688,6 +689,9 @@ class PgApiImpl {
 
   // Using this function instead of GetRootMemTracker allows us to avoid copying a shared_pointer
   int64_t GetRootMemTrackerConsumption() { return MemTracker::GetRootTrackerConsumption(); }
+
+  CHECKED_STATUS CDCGetChanges(YBCGetChangesResponse* response);
+  // Result<YBCGetChangesResponse> CDCGetChanges();
 
  private:
   class Interrupter;
