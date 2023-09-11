@@ -514,6 +514,39 @@ typedef struct PgLastKnownCatalogVersionInfo {
   bool is_db_catalog_version_mode;
 } YBCPgLastKnownCatalogVersionInfo;
 
+
+typedef struct DatumMessage {
+  const char* column_name;
+  long column_type;
+  // const char* ql_value_str;
+  uint64_t datum;
+  bool is_null;
+} YBCDatumMessage;
+
+typedef struct RowMessage {
+  int col_count;
+  YBCDatumMessage* cols;
+  uint64_t commit_time;
+  uint32_t transaction_id;
+  const char* action;
+  // const char* table_name;
+  uint32_t table_oid;
+} YBCRowMessage;
+
+typedef struct CDCSDKCheckpoint {
+  int64_t term;
+  int64_t index;
+  const char* key;
+  int32_t write_id;
+
+} YBCCDCSDKCheckpoint;
+
+typedef struct GetChangesResponse {
+  int row_count;
+  YBCRowMessage* rows;
+  YBCCDCSDKCheckpoint* checkpoint;
+} YBCGetChangesResponse;
+
 #ifdef __cplusplus
 }  // extern "C"
 #endif  // __cplusplus

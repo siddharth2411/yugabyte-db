@@ -729,6 +729,12 @@ YBCStatus YBCGetTableKeyRanges(
     uint64_t max_num_ranges, uint64_t range_size_bytes, bool is_forward, uint32_t max_key_length,
     void callback(void* callback_param, const char* key, size_t key_size), void* callback_param);
 
+YBCStatus YBCPgCDCSetCheckpoint();
+
+YBCStatus YBCPgCDCGetChanges(YBCCDCSDKCheckpoint* cdcsdk_checkpoint, YBCGetChangesResponse* response);
+
+// YBCGetChangesResponse YBCPgCDCGetChanges();
+
 #ifdef __cplusplus
 }  // extern "C"
 #endif

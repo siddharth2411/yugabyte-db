@@ -1458,6 +1458,18 @@ YBCStatus YBCPgValidatePlacement(const char *placement_info) {
   return ToYBCStatus(pgapi->ValidatePlacement(placement_info));
 }
 
+YBCStatus YBCPgCDCSetCheckpoint() {
+  return ToYBCStatus(pgapi->CDCSetCheckpoint());
+}
+
+YBCStatus YBCPgCDCGetChanges(YBCCDCSDKCheckpoint* cdcsdk_checkpoint,YBCGetChangesResponse* response) {
+  return ToYBCStatus(pgapi->CDCGetChanges(cdcsdk_checkpoint, response));
+}
+
+// YBCGetChangesResponse YBCPgCDCGetChanges() {
+//   return pgapi->CDCGetChanges().get();
+// }
+
 // Referential Integrity Caching
 YBCStatus YBCPgForeignKeyReferenceCacheDelete(const YBCPgYBTupleIdDescriptor *source) {
   return ProcessYbctid(*source, [](auto table_id, const auto& ybctid){

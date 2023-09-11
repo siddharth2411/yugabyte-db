@@ -25,6 +25,11 @@
 namespace yb {
 namespace pggate {
 
+Status PgValueFromPB(const YBCPgTypeEntity *type_entity,
+                     YBCPgTypeAttrs type_attrs,
+                     const QLValuePB& ql_value,
+                     uint64_t* datum,
+                     bool *is_null);
 /*
  * Convert a PgValue to a Datum given its type entity.
  */

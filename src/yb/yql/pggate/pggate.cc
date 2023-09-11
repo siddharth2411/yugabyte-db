@@ -28,6 +28,7 @@
 #include "yb/client/client_utils.h"
 #include "yb/client/table_info.h"
 
+#include "yb/common/wire_protocol.h"
 #include "yb/dockv/partition.h"
 #include "yb/common/pg_system_attr.h"
 #include "yb/common/pgsql_protocol.pb.h"
@@ -54,6 +55,7 @@
 #include "yb/util/range.h"
 #include "yb/util/status_format.h"
 #include "yb/util/thread.h"
+#include "yb/util/opid.h"
 
 #include "yb/yql/pggate/pg_column.h"
 #include "yb/yql/pggate/pg_ddl.h"
@@ -76,6 +78,12 @@
 #include "yb/yql/pggate/pg_update.h"
 #include "yb/yql/pggate/pggate_flags.h"
 #include "yb/yql/pggate/ybc_pggate.h"
+#include "yb/cdc/cdc_service.pb.h"
+#include "yb/cdc/cdc_service.proxy.h"
+#include "yb/common/ql_value.h"
+#include "ybgate/ybgate_api.h"
+// #include "yb/docdb/docdb_pgapi.h"
+#include "yb/yql/pggate/pg_value.h"
 
 using namespace std::literals;
 using std::string;
@@ -2125,6 +2133,201 @@ Result<boost::container::small_vector<RefCntSlice, 2>> PgApiImpl::GetTableKeyRan
       table_id, lower_bound_key, upper_bound_key, max_num_ranges, range_size_bytes, is_forward,
       max_key_length);
 }
+
+
+Status PgApiImpl::CDCSetCheckpoint() {
+
+  HostPort host_port;
+  CHECK_OK(host_port.ParseString("127.0.0.1", 9100));
+  LOG(INFO) <<"Sid: HostPort: " << host_port.ToString();
+  // CHECK_OK(host_port.ParseString("0.0.0.0:9100", 0));
+  //  host_port.set_port(PggateOptions::kDefaultPort);
+  //  LOG(INFO) << "Arpan hostport:  " << host_port.ToString() << "\n";
+  //  rpc::ProxyCache* proxy_cache_copy = proxy_cache_.get();
+  std::unique_ptr<cdc::CDCServiceProxy> cdc_proxy =
+      std::make_unique<cdc::CDCServiceProxy>(proxy_cache_.get(), host_port);
+  rpc::RpcController set_checkpoint_rpc;
+
+  cdc::SetCDCCheckpointRequestPB set_checkpoint_req;
+  OpId op_id = OpId::Min();
+  set_checkpoint_req.set_stream_id("5a9384c16fc54fef8882eab380d9f0b2");
+  set_checkpoint_req.set_tablet_id("efb49b8c8bae4297a6c5de825f1dfa5c");
+  set_checkpoint_req.set_initial_checkpoint(true);
+  set_checkpoint_req.set_cdc_sdk_safe_time(0);
+  set_checkpoint_req.set_bootstrap(false);
+  set_checkpoint_req.mutable_checkpoint()->mutable_op_id()->set_term(op_id.term);
+  set_checkpoint_req.mutable_checkpoint()->mutable_op_id()->set_index(op_id.index);
+
+  cdc::SetCDCCheckpointResponsePB set_checkpoint_resp;
+  Status st = cdc_proxy->SetCDCCheckpoint(
+      set_checkpoint_req, &set_checkpoint_resp, &set_checkpoint_rpc);
+  if(st.ok() && set_checkpoint_resp.has_error()) {
+    LOG(INFO) <<"Sid: Set checkpoint has error";
+  }
+
+  return Status::OK();
+
+}
+// Result<YBCGetChangesResponse> PgApiImpl::CDCGetChanges() {
+Status PgApiImpl::CDCGetChanges(YBCCDCSDKCheckpoint* cdcsdk_checkpoint,
+  YBCGetChangesResponse* response) {
+  LOG(INFO) << "Sid CDCGetChanges";
+  HostPort host_port;
+  CHECK_OK(host_port.ParseString("127.0.0.1", 9100));
+  LOG(INFO) <<"Sid: HostPort: " << host_port.ToString();
+  // CHECK_OK(host_port.ParseString("0.0.0.0:9100", 0));
+  //  host_port.set_port(PggateOptions::kDefaultPort);
+  //  LOG(INFO) << "Arpan hostport:  " << host_port.ToString() << "\n";
+  //  rpc::ProxyCache* proxy_cache_copy = proxy_cache_.get();
+  std::unique_ptr<cdc::CDCServiceProxy> cdc_proxy =
+      std::make_unique<cdc::CDCServiceProxy>(proxy_cache_.get(), host_port);
+
+  // cdc::CDCServiceProxy cdc_proxy = cdc::CDCServiceProxy(proxy_cache_.get(), host_port);
+
+  cdc::GetChangesRequestPB change_req;
+  // cdc::GetChangesResponsePB change_resp;
+
+  change_req.set_stream_id("5a9384c16fc54fef8882eab380d9f0b2");
+  change_req.set_tablet_id("efb49b8c8bae4297a6c5de825f1dfa5c");  // (tablets.Get(0).tablet_id());
+  if(!cdcsdk_checkpoint->key) {
+    LOG(INFO) << "Sid: Received checkpoint is empty, sending default values in GetChangesReqPB";
+    change_req.mutable_from_cdc_sdk_checkpoint()->set_index(0);
+    change_req.mutable_from_cdc_sdk_checkpoint()->set_term(0);
+    change_req.mutable_from_cdc_sdk_checkpoint()->set_key("");
+    change_req.mutable_from_cdc_sdk_checkpoint()->set_write_id(0);
+    change_req.mutable_from_cdc_sdk_checkpoint()->set_snapshot_time(0);
+  } else {
+    LOG(INFO) << "Sid: Received checkpoint from walsender: index: %ld" << cdcsdk_checkpoint->index;
+    change_req.mutable_from_cdc_sdk_checkpoint()->set_index(cdcsdk_checkpoint->index);
+    change_req.mutable_from_cdc_sdk_checkpoint()->set_term(cdcsdk_checkpoint->term);
+    change_req.mutable_from_cdc_sdk_checkpoint()->set_key(cdcsdk_checkpoint->key);
+    change_req.mutable_from_cdc_sdk_checkpoint()->set_write_id(cdcsdk_checkpoint->write_id);
+  }
+
+  change_req.set_wal_segment_index(0);
+  change_req.set_safe_hybrid_time(-1);
+
+  cdc::GetChangesResponsePB change_resp;
+
+  rpc::RpcController get_changes_rpc;
+  LOG(INFO) << "Sid: Calling cdc_proxy->GetChanges";
+  RETURN_NOT_OK(cdc_proxy->GetChanges(change_req, &change_resp, &get_changes_rpc));
+  if (change_resp.has_error()) {
+    LOG(INFO) << "Sid: Response error: " << change_resp.error().status().message();
+  }
+  // LOG(INFO) << "Sid: After RETURN_NOT_OK\n";
+  int row_count = change_resp.cdc_sdk_proto_records_size();
+  YBCRowMessage *rows = (YBCRowMessage *)malloc(sizeof(YBCRowMessage) * row_count);
+  YBCCDCSDKCheckpoint* new_checkpoint = (YBCCDCSDKCheckpoint *)malloc(sizeof(YBCCDCSDKCheckpoint));
+
+  LOG(INFO) << "Sid: Got new checkpoint from GetChanges RPC";
+  cdc::CDCSDKCheckpointPB checkpoint = change_resp.cdc_sdk_checkpoint();
+  LOG(INFO) << "Sid: Checkpoint values: " << checkpoint.DebugString();
+  new_checkpoint->index = checkpoint.index();
+  new_checkpoint->term = checkpoint.term();
+  new_checkpoint->key = checkpoint.key().c_str();
+  new_checkpoint->write_id = checkpoint.write_id();
+
+  LOG(INFO) << "Sid: row count in pggate: " << row_count;
+
+  // YBCGetChangesResponse response;
+
+  for (int i = 0; i < row_count; i++) {
+    cdc::CDCSDKProtoRecordPB record = change_resp.cdc_sdk_proto_records(i);
+    // YBCRowMessage row;
+    // int col_count = 0;
+
+    if (!record.has_row_message()) {
+      rows[i].col_count = 0;
+      continue;
+    }
+    cdc::RowMessage row_message = record.row_message();
+    int col_count = row_message.new_tuple_size();
+    LOG(INFO) <<"Sid: col count: " << col_count;
+    DatumMessage *cols = (DatumMessage *)malloc(sizeof(DatumMessage) * col_count);
+
+    for (int j = 0; j < col_count; j++) {
+      DatumMessagePB datum_message = row_message.new_tuple(j);
+      // YBCDatumMessage col;
+      if (datum_message.has_column_name()) {
+        LOG(INFO) << "Setting column name " << datum_message.column_name();
+        char *name = (char *)malloc(sizeof(char) * datum_message.column_name().length());
+        strcpy(name, datum_message.column_name().c_str());
+        // cols[j].column_name = datum_message.column_name().c_str();
+        cols[j].column_name = name;
+        LOG(INFO) << "Set column name " << cols[j].column_name;
+      } else {
+        cols[j].column_name = "NA";
+      }
+      if (datum_message.has_column_type()) {
+        cols[j].column_type = datum_message.column_type();
+      }
+      if (datum_message.has_pg_value()) {
+        uint64 datum;
+        bool is_null;
+
+        // YbgTypeDesc type_desc{(int) datum_message.column_type(), -1 /* typmod */};
+        int type_oid = (int)datum_message.column_type();
+        YBCPgTypeAttrs type_attrs{-1};
+        // const YBCPgTypeEntity* type_entity = yb::docdb::DocPgGetTypeEntity(type_desc);
+        const YBCPgTypeEntity *type_entity = FindTypeEntity(type_oid);
+        LOG(INFO) << "Before PgValueFromPB\n";
+        RETURN_NOT_OK(
+            PgValueFromPB(type_entity, type_attrs, datum_message.pg_value(), &datum, &is_null));
+        LOG(INFO) << "After PgValueFromPB\n";
+        cols[j].datum = datum;
+        cols[j].is_null = is_null;
+      }
+      // cols[j] = col;
+      LOG(INFO) << "Verify column name: " << cols[j].column_name;
+    }
+
+    if (row_message.has_commit_time()) {
+      rows[i].commit_time = row_message.commit_time();
+    } else {
+      rows[i].commit_time = -1;
+    }
+
+    if (row_message.has_transaction_id()) {
+      LOG(INFO) << "Transaction id: " << row_message.transaction_id();
+      rows[i].transaction_id = 1;  // std::stoi(row_message.transaction_id());  // does it work?
+    } else {
+      rows[i].transaction_id = 1;
+    }
+
+    if (row_message.has_op()) {
+      LOG(INFO) << "Sid: Has Row OP: " << RowMessage_Op_Name(row_message.op()).c_str();
+      rows[i].action = RowMessage_Op_Name(row_message.op()).c_str();
+    } else {
+      LOG(INFO) << "Sid: No Row OP";
+      rows[i].action = RowMessage_Op_Name(cdc::RowMessage_Op::RowMessage_Op_UNKNOWN).c_str();
+    }
+
+    if (row_message.has_table_id()) {
+      LOG(INFO) << "Table Id: " << row_message.table_id();
+      Result<uint32_t> oid_result = yb::GetPgsqlTableOid(row_message.table_id());
+      LOG(INFO) << "OID conversion ok: " << oid_result.ok();
+      RETURN_NOT_OK(oid_result);
+      LOG(INFO) << "After RETURN_NOT_OK check";
+      // uint32_t oid_value = ;
+      // printf("oid: %ud\n", oid_value);
+      // row.table_name = row_message.table().c_str();
+      rows[i].table_oid = oid_result.get();
+    } else {
+      LOG(INFO) << "Sid: table OID -1";
+      rows[i].table_oid = -1;
+    }
+
+    rows[i].cols = cols;
+    rows[i].col_count = col_count;
+  }
+
+    response->row_count = row_count;
+    response->rows = rows;
+    response->checkpoint = new_checkpoint;
+
+    return Status::OK();
+};
 
 } // namespace pggate
 } // namespace yb

@@ -3879,17 +3879,21 @@ RelationIdGetRelation(Oid relationId)
 	/* Make sure we're in an xact, even if this ends up being a cache hit */
 	Assert(IsTransactionState());
 
+	// ereport(LOG, (errmsg("Sid: is in transaction state")));
 	/*
 	 * first try to find reldesc in the cache
 	 */
 	RelationIdCacheLookup(relationId, rd);
+	// ereport(LOG, (errmsg("Sid: completed cache lookup")));
 
 	if (RelationIsValid(rd))
 	{
+		// ereport(LOG, (errmsg("Sid: valid relation")));
 		RelationIncrementReferenceCount(rd);
 		/* revalidate cache entry if necessary */
 		if (!rd->rd_isvalid)
 		{
+			// ereport(LOG, (errmsg("Sid: inside nested if")));
 			/*
 			 * Indexes only have a limited number of possible schema changes,
 			 * and we don't want to use the full-blown procedure because it's
@@ -3925,6 +3929,7 @@ RelationIdGetRelation(Oid relationId)
 	if (relationId == ClassOidIndexId)
 		elog(FATAL, "pg_class_oid_index is queried before it's initalized!");
 
+	// ereport(LOG, (errmsg("Sid: no reldesc in cache")));
 	/*
 	 * no reldesc in the cache, so have RelationBuildDesc() build one and add
 	 * it.
@@ -3932,6 +3937,7 @@ RelationIdGetRelation(Oid relationId)
 	rd = RelationBuildDesc(relationId, true);
 	if (RelationIsValid(rd))
 		RelationIncrementReferenceCount(rd);
+	// ereport(LOG, (errmsg("Sid: rd: %p", rd)));
 	return rd;
 }
 

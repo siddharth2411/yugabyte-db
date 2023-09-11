@@ -898,7 +898,12 @@ Status SetValueFromQLBinaryHelper(
   YBCPgTypeAttrs type_attrs{-1 /* typmod */};
 
   cdc_datum_message->set_column_type(pg_data_type);
-  switch (pg_data_type) {
+
+  QLValuePB* ql_value_copy = new QLValuePB();
+  ql_value_copy->CopyFrom(ql_value);
+  cdc_datum_message->set_allocated_pg_value(ql_value_copy);
+
+  switch (arg_type->type_oid) {
     case BOOLOID: {
       func_name = "boolout";
       bool bool_val = ql_value.bool_value();

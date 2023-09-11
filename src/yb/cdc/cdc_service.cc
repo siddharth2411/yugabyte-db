@@ -1492,6 +1492,7 @@ void CDCServiceImpl::GetChanges(
       CDCErrorPB::INVALID_REQUEST,
       context);
 
+  YB_LOG_EVERY_N_SECS(INFO, 10) << "Sid: TabletId & StreamID checks passed";
   auto stream_id = RPC_VERIFY_STRING_TO_STREAM_ID(
       req->has_db_stream_id() ? req->db_stream_id() : req->stream_id());
 
@@ -1506,6 +1507,7 @@ void CDCServiceImpl::GetChanges(
         CheckTabletValidForStream(producer_tablet), resp->mutable_error(),
         status.IsTabletSplit() ? CDCErrorPB::TABLET_SPLIT : CDCErrorPB::INVALID_REQUEST, context);
   }
+  YB_LOG_EVERY_N_SECS(INFO, 10) << "Sid: Tablet is valid for stream";
 
   auto tablet_peer = context_->LookupTablet(req->tablet_id());
 
@@ -1544,14 +1546,17 @@ void CDCServiceImpl::GetChanges(
   StreamMetadata& record = *stream_meta_ptr;
 
   if (record.GetSourceType() == CDCSDK) {
+    LOG(INFO) << "Sid: Source type is CDCSDK";
     RPC_STATUS_RETURN_ERROR(
         CheckStreamActive(producer_tablet), resp->mutable_error(), CDCErrorPB::INTERNAL_ERROR,
         context);
     impl_->UpdateActiveTime(producer_tablet);
+    LOG(INFO) << "Sid: Stream is active";
 
     if (IsCDCSDKSnapshotDone(*req)) {
       // Remove 'kCDCSDKSnapshotKey' from the colocated snapshot row, to indicate that the snapshot
       // is done.
+      LOG(INFO) << "Sid: CDCSDK snapshot is done";
       RPC_STATUS_RETURN_ERROR(
           UpdateSnapshotDone(
               stream_id, req->tablet_id(),
@@ -1584,23 +1589,27 @@ void CDCServiceImpl::GetChanges(
 
   bool got_explicit_checkpoint_from_request = false;
   if (record.GetCheckpointType() == EXPLICIT) {
+    LOG(INFO) << "Sid: Checkpoint type is explicit";
     got_explicit_checkpoint_from_request = GetExplicitOpIdAndSafeTime(
         req, &explicit_op_id, &cdc_sdk_explicit_op_id, &cdc_sdk_explicit_safe_time);
   }
 
   // Get opId from request.
   if (!GetFromOpId(req, &from_op_id, &cdc_sdk_from_op_id)) {
+    LOG(INFO) << "Sid: FromOpId not found";
     auto last_checkpoint = RPC_VERIFY_RESULT(
         GetLastCheckpoint(producer_tablet, stream_meta_ptr.get()->GetSourceType(), false),
         resp->mutable_error(), CDCErrorPB::INTERNAL_ERROR, context);
-    LOG(WARNING) << "GetChanges called on T " << req->tablet_id() << " S " << req->stream_id()
+    LOG(INFO) << "GetChanges called on T " << req->tablet_id() << " S " << req->stream_id()
                  << " without an index. Using last checkpoint: " << last_checkpoint;
     if (record.GetSourceType() == XCLUSTER) {
       from_op_id = last_checkpoint;
     } else {
+      LOG(INFO) << "Sid: else block";
       // This is the initial checkpoint set in cdc_state table, during create of CDCSDK
       // create stream, so throw an exeception to client to call setCDCCheckpoint or  take Snapshot.
       if (last_checkpoint == OpId::Invalid()) {
+        LOG(INFO) << "Sid: Invalid OpId, throwing error";
         SetupErrorAndRespond(
             resp->mutable_error(),
             STATUS_FORMAT(
@@ -1693,6 +1702,10 @@ void CDCServiceImpl::GetChanges(
         &last_streamed_op_id, req->safe_hybrid_time(), req->wal_segment_index(),
         &last_readable_index, tablet_peer->tablet_metadata()->colocated() ? req->table_id() : "",
         get_changes_deadline);
+
+    if(status.ok()) {
+    LOG(INFO) <<"Sid: Status OK from GetChangesForCDCSDK";
+    }
     // This specific error from the docdb_pgapi layer is used to identify enum cache entry is
     // out of date, hence we need to repopulate.
     if (status.IsCacheMissError()) {
@@ -1721,6 +1734,8 @@ void CDCServiceImpl::GetChanges(
           req->wal_segment_index(), &last_readable_index,
           tablet_peer->tablet_metadata()->colocated() ? req->table_id() : "", get_changes_deadline);
     }
+
+    LOG(INFO) << "Sid: record count inside GetChanges: " << resp->records_size();
     // This specific error indicates that a tablet split occured on the tablet.
     if (status.IsTabletSplit()) {
       status = UpdateChildrenTabletsOnSplitOpForCDCSDK(producer_tablet);
@@ -1750,7 +1765,7 @@ void CDCServiceImpl::GetChanges(
     tablet_metric->is_bootstrap_required->set_value(status.IsNotFound());
   }
 
-  VLOG(1) << "T " << req->tablet_id() << " sending GetChanges response " << AsString(*resp);
+  LOG(INFO) << "T " << req->tablet_id() << " sending GetChanges response " << AsString(*resp);
   RPC_STATUS_RETURN_ERROR(
       status,
       resp->mutable_error(),
