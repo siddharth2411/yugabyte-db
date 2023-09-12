@@ -729,9 +729,15 @@ YBCStatus YBCGetTableKeyRanges(
     uint64_t max_num_ranges, uint64_t range_size_bytes, bool is_forward, uint32_t max_key_length,
     void callback(void* callback_param, const char* key, size_t key_size), void* callback_param);
 
-YBCStatus YBCPgCDCSetCheckpoint();
+YBCStatus YBCPgCDCGetStreamId(YBCGetCDCSDKStreamResponse* cdc_stream);
 
-YBCStatus YBCPgCDCGetChanges(YBCCDCSDKCheckpoint* cdcsdk_checkpoint, YBCGetChangesResponse* response);
+YBCStatus YBCPgCDCGetTabletListToPoll(const char* stream_id, const char* table_id,
+    YBCGetTabletListToPollResponse* tablet_list_resp);
+
+YBCStatus YBCPgCDCSetCheckpoint(const char* stream_id, const char* tablet_id);
+
+YBCStatus YBCPgCDCGetChanges(const char* stream_id, const char* tablet_id,
+    YBCCDCSDKCheckpoint* cdcsdk_checkpoint, YBCGetChangesResponse* response);
 
 // YBCGetChangesResponse YBCPgCDCGetChanges();
 

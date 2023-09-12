@@ -701,8 +701,15 @@ class PgApiImpl {
   // Using this function instead of GetRootMemTracker allows us to avoid copying a shared_pointer
   int64_t GetRootMemTrackerConsumption() { return MemTracker::GetRootTrackerConsumption(); }
 
-  Status CDCSetCheckpoint();
-  Status CDCGetChanges(YBCCDCSDKCheckpoint* cdcsdk_checkpoint, YBCGetChangesResponse* response);
+  Status CDCGetStreamId(master::ListCDCStreamsResponsePB* resp);
+
+  Status CDCGetTabletListToPoll(const std::string& stream_id, const std::string& table_id,
+    cdc::GetTabletListToPollForCDCResponsePB* get_tablet_list_resp);
+
+  Status CDCSetCheckpoint(const std::string& stream_id, const std::string& tablet_id);
+
+  Status CDCGetChanges(const std::string& stream_id, const std::string& tablet_id,
+    YBCCDCSDKCheckpoint* cdcsdk_checkpoint, YBCGetChangesResponse* response);
   // Result<YBCGetChangesResponse> CDCGetChanges();
 
  private:

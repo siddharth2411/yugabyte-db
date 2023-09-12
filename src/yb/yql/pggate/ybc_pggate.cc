@@ -1458,12 +1458,34 @@ YBCStatus YBCPgValidatePlacement(const char *placement_info) {
   return ToYBCStatus(pgapi->ValidatePlacement(placement_info));
 }
 
-YBCStatus YBCPgCDCSetCheckpoint() {
-  return ToYBCStatus(pgapi->CDCSetCheckpoint());
+YBCStatus YBCPgCDCGetStreamId(YBCGetCDCSDKStreamResponse* cdc_stream) {
+  master::ListCDCStreamsResponsePB resp;
+  auto s = pgapi->CDCGetStreamId(&resp);
+  if(s.ok()) {
+  cdc_stream->stream_id = YBCPAllocStdString(resp.streams().Get(0).stream_id());
+  cdc_stream->table_id = YBCPAllocStdString(resp.streams().Get(0).table_id().Get(0));
+  }
+  return ToYBCStatus(s);
 }
 
-YBCStatus YBCPgCDCGetChanges(YBCCDCSDKCheckpoint* cdcsdk_checkpoint,YBCGetChangesResponse* response) {
-  return ToYBCStatus(pgapi->CDCGetChanges(cdcsdk_checkpoint, response));
+YBCStatus YBCPgCDCGetTabletListToPoll(const char* stream_id, const char* table_id,
+  YBCGetTabletListToPollResponse* tablet_list_resp) {
+  cdc::GetTabletListToPollForCDCResponsePB get_tablet_list_resp;
+  Status s = pgapi->CDCGetTabletListToPoll(stream_id, table_id, &get_tablet_list_resp);
+  if(s.ok()) {
+    tablet_list_resp->tablet_id = YBCPAllocStdString(get_tablet_list_resp.tablet_checkpoint_pairs()
+                                  .Get(0).tablet_locations().tablet_id());
+  }
+  return ToYBCStatus(s);
+}
+
+YBCStatus YBCPgCDCSetCheckpoint(const char* stream_id, const char* tablet_id) {
+  return ToYBCStatus(pgapi->CDCSetCheckpoint(stream_id, tablet_id));
+}
+
+YBCStatus YBCPgCDCGetChanges(const char* stream_id, const char* tablet_id,
+  YBCCDCSDKCheckpoint* cdcsdk_checkpoint,YBCGetChangesResponse* response) {
+  return ToYBCStatus(pgapi->CDCGetChanges(stream_id, tablet_id, cdcsdk_checkpoint, response));
 }
 
 // YBCGetChangesResponse YBCPgCDCGetChanges() {

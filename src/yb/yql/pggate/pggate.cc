@@ -40,6 +40,7 @@
 
 #include "yb/gutil/casts.h"
 
+#include "yb/master/master_replication.proxy.h"
 #include "yb/rpc/messenger.h"
 #include "yb/rpc/proxy.h"
 #include "yb/rpc/secure_stream.h"
@@ -2135,23 +2136,70 @@ Result<boost::container::small_vector<RefCntSlice, 2>> PgApiImpl::GetTableKeyRan
 }
 
 
-Status PgApiImpl::CDCSetCheckpoint() {
+Status PgApiImpl::CDCGetStreamId(master::ListCDCStreamsResponsePB* resp) {
+  HostPort host_port;
+  CHECK_OK(host_port.ParseString("127.0.0.1", 7100));
+  LOG(INFO) <<"Sid: HostPort: " << host_port.ToString();
+  std::unique_ptr<master::MasterReplicationProxy> master_replication_proxy_;
+  master_replication_proxy_ = std::make_unique<master::MasterReplicationProxy>(
+      proxy_cache_.get(), host_port);
+
+  master::ListCDCStreamsRequestPB req;
+  req.set_id_type(yb::master::IdTypePB::NAMESPACE_ID);
+
+  rpc::RpcController rpc;
+  // rpc.set_timeout(timeout_);
+  RETURN_NOT_OK(master_replication_proxy_->ListCDCStreams(req, resp, &rpc));
+
+  if (resp->has_error()) {
+        LOG(INFO) << "Error getting CDC stream list: " << resp->error().status().message();
+        return StatusFromPB(resp->error().status());
+  }
+
+  LOG(INFO) << "CDC Streams: \r\n" << resp->DebugString();
+  return Status::OK();
+}
+
+Status PgApiImpl::CDCGetTabletListToPoll(
+    const string& stream_id, const string& table_id,
+    cdc::GetTabletListToPollForCDCResponsePB* get_tablet_list_resp) {
+  HostPort host_port;
+  CHECK_OK(host_port.ParseString("127.0.0.1", 9100));
+  LOG(INFO) <<"Sid: HostPort: " << host_port.ToString();
+  std::unique_ptr<cdc::CDCServiceProxy> cdc_proxy =
+      std::make_unique<cdc::CDCServiceProxy>(proxy_cache_.get(), host_port);
+  rpc::RpcController rpc;
+  cdc::GetTabletListToPollForCDCRequestPB get_tablet_list_req;
+
+  get_tablet_list_req.mutable_table_info()->set_table_id(table_id);
+  get_tablet_list_req.mutable_table_info()->set_stream_id(stream_id);
+  get_tablet_list_req.set_tablet_id("");
+
+  RETURN_NOT_OK(
+      cdc_proxy->GetTabletListToPollForCDC(get_tablet_list_req, get_tablet_list_resp, &rpc));
+
+  if (get_tablet_list_resp->has_error()) {
+        LOG(INFO) << "Error getting CDC stream list: " << get_tablet_list_resp->error().status().message();
+        return StatusFromPB(get_tablet_list_resp->error().status());
+  }
+
+  LOG(INFO) <<" GetTabletListToPoll response: "<< get_tablet_list_resp->DebugString();
+  return Status::OK();
+}
+
+Status PgApiImpl::CDCSetCheckpoint(const string& stream_id, const string& tablet_id) {
 
   HostPort host_port;
   CHECK_OK(host_port.ParseString("127.0.0.1", 9100));
   LOG(INFO) <<"Sid: HostPort: " << host_port.ToString();
-  // CHECK_OK(host_port.ParseString("0.0.0.0:9100", 0));
-  //  host_port.set_port(PggateOptions::kDefaultPort);
-  //  LOG(INFO) << "Arpan hostport:  " << host_port.ToString() << "\n";
-  //  rpc::ProxyCache* proxy_cache_copy = proxy_cache_.get();
   std::unique_ptr<cdc::CDCServiceProxy> cdc_proxy =
       std::make_unique<cdc::CDCServiceProxy>(proxy_cache_.get(), host_port);
   rpc::RpcController set_checkpoint_rpc;
 
   cdc::SetCDCCheckpointRequestPB set_checkpoint_req;
   OpId op_id = OpId::Min();
-  set_checkpoint_req.set_stream_id("5a9384c16fc54fef8882eab380d9f0b2");
-  set_checkpoint_req.set_tablet_id("efb49b8c8bae4297a6c5de825f1dfa5c");
+  set_checkpoint_req.set_stream_id(stream_id);
+  set_checkpoint_req.set_tablet_id(tablet_id);
   set_checkpoint_req.set_initial_checkpoint(true);
   set_checkpoint_req.set_cdc_sdk_safe_time(0);
   set_checkpoint_req.set_bootstrap(false);
@@ -2168,9 +2216,9 @@ Status PgApiImpl::CDCSetCheckpoint() {
   return Status::OK();
 
 }
-// Result<YBCGetChangesResponse> PgApiImpl::CDCGetChanges() {
-Status PgApiImpl::CDCGetChanges(YBCCDCSDKCheckpoint* cdcsdk_checkpoint,
-  YBCGetChangesResponse* response) {
+
+Status PgApiImpl::CDCGetChanges(const string& stream_id, const string& tablet_id,
+  YBCCDCSDKCheckpoint* cdcsdk_checkpoint, YBCGetChangesResponse* response) {
   LOG(INFO) << "Sid CDCGetChanges";
   HostPort host_port;
   CHECK_OK(host_port.ParseString("127.0.0.1", 9100));
@@ -2187,8 +2235,8 @@ Status PgApiImpl::CDCGetChanges(YBCCDCSDKCheckpoint* cdcsdk_checkpoint,
   cdc::GetChangesRequestPB change_req;
   // cdc::GetChangesResponsePB change_resp;
 
-  change_req.set_stream_id("5a9384c16fc54fef8882eab380d9f0b2");
-  change_req.set_tablet_id("efb49b8c8bae4297a6c5de825f1dfa5c");  // (tablets.Get(0).tablet_id());
+  change_req.set_stream_id(stream_id);
+  change_req.set_tablet_id(tablet_id);  // (tablets.Get(0).tablet_id());
   if(!cdcsdk_checkpoint->key) {
     LOG(INFO) << "Sid: Received checkpoint is empty, sending default values in GetChangesReqPB";
     change_req.mutable_from_cdc_sdk_checkpoint()->set_index(0);
@@ -2197,7 +2245,7 @@ Status PgApiImpl::CDCGetChanges(YBCCDCSDKCheckpoint* cdcsdk_checkpoint,
     change_req.mutable_from_cdc_sdk_checkpoint()->set_write_id(0);
     change_req.mutable_from_cdc_sdk_checkpoint()->set_snapshot_time(0);
   } else {
-    LOG(INFO) << "Sid: Received checkpoint from walsender: index: %ld" << cdcsdk_checkpoint->index;
+    LOG(INFO) << "Sid: Received checkpoint from walsender: index: " << cdcsdk_checkpoint->index;
     change_req.mutable_from_cdc_sdk_checkpoint()->set_index(cdcsdk_checkpoint->index);
     change_req.mutable_from_cdc_sdk_checkpoint()->set_term(cdcsdk_checkpoint->term);
     change_req.mutable_from_cdc_sdk_checkpoint()->set_key(cdcsdk_checkpoint->key);
@@ -2231,6 +2279,7 @@ Status PgApiImpl::CDCGetChanges(YBCCDCSDKCheckpoint* cdcsdk_checkpoint,
   LOG(INFO) << "Sid: row count in pggate: " << row_count;
 
   // YBCGetChangesResponse response;
+  LOG(INFO) << "Sid: GetChanges Response: " << change_resp.DebugString();
 
   for (int i = 0; i < row_count; i++) {
     cdc::CDCSDKProtoRecordPB record = change_resp.cdc_sdk_proto_records(i);
@@ -2274,12 +2323,13 @@ Status PgApiImpl::CDCGetChanges(YBCCDCSDKCheckpoint* cdcsdk_checkpoint,
         LOG(INFO) << "Before PgValueFromPB\n";
         RETURN_NOT_OK(
             PgValueFromPB(type_entity, type_attrs, datum_message.pg_value(), &datum, &is_null));
-        LOG(INFO) << "After PgValueFromPB\n";
+        LOG(INFO) << Format("After PgValueFromPB: datum: $0, is_null: $1", datum , is_null) ;
         cols[j].datum = datum;
         cols[j].is_null = is_null;
       }
       // cols[j] = col;
       LOG(INFO) << "Verify column name: " << cols[j].column_name;
+
     }
 
     if (row_message.has_commit_time()) {

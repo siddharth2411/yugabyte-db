@@ -210,6 +210,8 @@ static XLogRecPtr logical_startptr = InvalidXLogRecPtr;
 
 bool called_set_checkpt = false;
 YBCCDCSDKCheckpoint cdc_sdk_checkpoint;
+YBCGetCDCSDKStreamResponse cdc_stream;
+YBCGetTabletListToPollResponse tablet_list_resp;
 /* A sample associating a WAL location with the time it was written. */
 typedef struct
 {
@@ -1114,6 +1116,11 @@ StartLogicalReplication(StartReplicationCmd *cmd)
 	replication_active = true;
 
 	SyncRepInitConfig();
+
+	HandleYBStatus(YBCPgCDCGetStreamId(&cdc_stream));
+	ereport(LOG, (errmsg("Sid: Stream ID: %s, Table ID: %s", cdc_stream.stream_id, cdc_stream.table_id)));
+	HandleYBStatus(YBCPgCDCGetTabletListToPoll(cdc_stream.stream_id, cdc_stream.table_id, &tablet_list_resp));
+	ereport(LOG, (errmsg("Sid: Tablet ID: %s", tablet_list_resp.tablet_id)));
 
 	/* Main loop of walsender */
 	WalSndLoop(XLogSendLogical);
@@ -2805,15 +2812,16 @@ XLogSendLogical(void)
 	if(!called_set_checkpt) {
 		called_set_checkpt = true;
 		ereport(LOG, (errmsg("Sid: calling YBCPgCDCSetCheckpoint")));
-		HandleYBStatus(YBCPgCDCSetCheckpoint());
+		HandleYBStatus(YBCPgCDCSetCheckpoint(cdc_stream.stream_id, tablet_list_resp.tablet_id));
 	}
 
 	ereport(LOG, (errmsg("Sid: before sleep")));
-	sleep(600);
+	// sleep(600);
 	ereport(LOG, (errmsg("Sid: after sleep")));
 	YBCGetChangesResponse response;
-	ereport(LOG, (errmsg("Sid: calling YBCPgCDCGetChanges")));
-	HandleYBStatus(YBCPgCDCGetChanges(&cdc_sdk_checkpoint, &response));
+	ereport(LOG, (errmsg("Sid: calling YBCPgCDCGetChanges for Stream ID: %s and Tablet ID: %s", cdc_stream.stream_id, tablet_list_resp.tablet_id)));
+	HandleYBStatus(YBCPgCDCGetChanges(cdc_stream.stream_id, tablet_list_resp.tablet_id, 
+		&cdc_sdk_checkpoint, &response));
 	cdc_sdk_checkpoint = *(response.checkpoint);
 	ereport(LOG, (errmsg("Sid: Checkpoint values: index: %lld, term: %lld, key: %s, write_id: %d", cdc_sdk_checkpoint.index, cdc_sdk_checkpoint.term, cdc_sdk_checkpoint.key, cdc_sdk_checkpoint.write_id)));
 
@@ -2876,7 +2884,7 @@ XLogSendLogical(void)
 			// elog(INFO, "Value of %d row %d col: typid %d datum %lld string: %s", i, j, typid, col.datum, str_value);
 		}
 		for(int i = 0; i < num_attributes; i++) {
-			ereport(LOG, (errmsg("Sid: datum values[%d]: %lu", i, datums[i])));
+			ereport(LOG, (errmsg("Sid: datum values[%d]: %p", i, datums)));
 		}
 
 		txn->xid = row.transaction_id;
@@ -2909,7 +2917,7 @@ XLogSendLogical(void)
 		}
 	}
 	AbortCurrentTransaction();
-	sleep(5);
+	sleep(10);
 
 	// Relation relation = RelationIdGetRelation(16384);
 	// logical_decoding_ctx->callbacks.change_cb(logical_decoding_ctx, txn, relation, change);

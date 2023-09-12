@@ -3876,6 +3876,7 @@ RelationIdGetRelation(Oid relationId)
 {
 	Relation	rd;
 
+	// ereport(LOG, (errmsg("Inside RelationIdGetRelation")));
 	/* Make sure we're in an xact, even if this ends up being a cache hit */
 	Assert(IsTransactionState());
 

@@ -140,6 +140,7 @@ static void ybcLoadTableInfo(Relation relation, YbScanPlan scan_plan)
 	Oid            dboid          = YBCGetDatabaseOid(relation);
 	YBCPgTableDesc ybc_table_desc = NULL;
 
+	// ereport(LOG, (errmsg("Inside ybcLoadTableInfo for table: %d", relation->rd_id)));
 	HandleYBStatus(YBCPgGetTableDesc(dboid, YbGetStorageRelid(relation), &ybc_table_desc));
 
 	for (AttrNumber attnum = 1; attnum <= relation->rd_att->natts; attnum++)

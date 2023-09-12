@@ -547,6 +547,15 @@ typedef struct GetChangesResponse {
   YBCCDCSDKCheckpoint* checkpoint;
 } YBCGetChangesResponse;
 
+typedef struct GetCDCSDKStreamResponse {
+  const char* stream_id;
+  const char* table_id;
+} YBCGetCDCSDKStreamResponse;
+
+typedef struct GetTabletListToPollResponse {
+  const char* tablet_id;
+} YBCGetTabletListToPollResponse;
+
 #ifdef __cplusplus
 }  // extern "C"
 #endif  // __cplusplus
