@@ -2237,6 +2237,8 @@ Status PgApiImpl::CDCGetChanges(const string& stream_id, const string& tablet_id
 
   change_req.set_stream_id(stream_id);
   change_req.set_tablet_id(tablet_id);  // (tablets.Get(0).tablet_id());
+  LOG(INFO) << "Sid: set OPID.index in GetChanges Request to: "<< cdcsdk_checkpoint->index;
+  // change_req.mutable_from_cdc_sdk_checkpoint()->set_index(cdcsdk_checkpoint->index);
   if(!cdcsdk_checkpoint->key) {
     LOG(INFO) << "Sid: Received checkpoint is empty, sending default values in GetChangesReqPB";
     change_req.mutable_from_cdc_sdk_checkpoint()->set_index(0);
@@ -2263,14 +2265,17 @@ Status PgApiImpl::CDCGetChanges(const string& stream_id, const string& tablet_id
   if (change_resp.has_error()) {
     LOG(INFO) << "Sid: Response error: " << change_resp.error().status().message();
   }
-  // LOG(INFO) << "Sid: After RETURN_NOT_OK\n";
+  LOG(INFO) << "Sid: GetChanges Response: " << change_resp.DebugString();
+
   int row_count = change_resp.cdc_sdk_proto_records_size();
   YBCRowMessage *rows = (YBCRowMessage *)malloc(sizeof(YBCRowMessage) * row_count);
   YBCCDCSDKCheckpoint* new_checkpoint = (YBCCDCSDKCheckpoint *)malloc(sizeof(YBCCDCSDKCheckpoint));
 
-  LOG(INFO) << "Sid: Got new checkpoint from GetChanges RPC";
   cdc::CDCSDKCheckpointPB checkpoint = change_resp.cdc_sdk_checkpoint();
-  LOG(INFO) << "Sid: Checkpoint values: " << checkpoint.DebugString();
+  LOG(INFO) << "Sid: Checkpoint values from GetChanges: " << checkpoint.DebugString();
+  if(checkpoint.index() >= 0 && ((unsigned int)checkpoint.index() != cdcsdk_checkpoint->index)) {
+    LOG(INFO) << "Sid: Received a different index in checkpoint";
+  }
   new_checkpoint->index = checkpoint.index();
   new_checkpoint->term = checkpoint.term();
   new_checkpoint->key = checkpoint.key().c_str();
@@ -2279,12 +2284,19 @@ Status PgApiImpl::CDCGetChanges(const string& stream_id, const string& tablet_id
   LOG(INFO) << "Sid: row count in pggate: " << row_count;
 
   // YBCGetChangesResponse response;
-  LOG(INFO) << "Sid: GetChanges Response: " << change_resp.DebugString();
+
 
   for (int i = 0; i < row_count; i++) {
     cdc::CDCSDKProtoRecordPB record = change_resp.cdc_sdk_proto_records(i);
     // YBCRowMessage row;
     // int col_count = 0;
+    if(record.has_cdc_sdk_op_id()) {
+      LOG(INFO) << "Record OPID.index: " << record.cdc_sdk_op_id().index();
+      rows[i].record_op_id_index = record.cdc_sdk_op_id().index();
+    } else {
+      LOG(INFO) << "No Record OPID found. Setting index to -1";
+      rows[i].record_op_id_index = -1;
+    }
 
     if (!record.has_row_message()) {
       rows[i].col_count = 0;
@@ -2340,7 +2352,7 @@ Status PgApiImpl::CDCGetChanges(const string& stream_id, const string& tablet_id
 
     if (row_message.has_transaction_id()) {
       LOG(INFO) << "Transaction id: " << row_message.transaction_id();
-      rows[i].transaction_id = 1;  // std::stoi(row_message.transaction_id());  // does it work?
+      rows[i].transaction_id = static_cast<uint32_t>(std::stoul(row_message.transaction_id()));  // std::stoi(row_message.transaction_id());  // does it work?
     } else {
       rows[i].transaction_id = 1;
     }
@@ -2356,7 +2368,7 @@ Status PgApiImpl::CDCGetChanges(const string& stream_id, const string& tablet_id
     if (row_message.has_table_id()) {
       LOG(INFO) << "Table Id: " << row_message.table_id();
       Result<uint32_t> oid_result = yb::GetPgsqlTableOid(row_message.table_id());
-      LOG(INFO) << "OID conversion ok: " << oid_result.ok();
+      LOG(INFO) << Format("OID conversion ok: $0, table_OID: $1", oid_result.ok(), oid_result.get());
       RETURN_NOT_OK(oid_result);
       LOG(INFO) << "After RETURN_NOT_OK check";
       // uint32_t oid_value = ;

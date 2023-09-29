@@ -528,6 +528,7 @@ typedef struct RowMessage {
   YBCDatumMessage* cols;
   uint64_t commit_time;
   uint32_t transaction_id;
+  uint64_t record_op_id_index;
   const char* action;
   // const char* table_name;
   uint32_t table_oid;
@@ -535,7 +536,7 @@ typedef struct RowMessage {
 
 typedef struct CDCSDKCheckpoint {
   int64_t term;
-  int64_t index;
+  uint64_t index;
   const char* key;
   int32_t write_id;
 

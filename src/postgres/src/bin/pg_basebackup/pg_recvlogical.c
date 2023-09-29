@@ -121,6 +121,7 @@ sendFeedback(PGconn *conn, TimestampTz now, bool force, bool replyRequested)
 	char		replybuf[1 + 8 + 8 + 8 + 8 + 1];
 	int			len = 0;
 
+	fprintf(stderr, _("Sid: inside sendFeedback. force=%s, replyRequested=%s\n"), force ? "true" : "false", replyRequested ? "true" : "false");
 	/*
 	 * we normally don't want to send superfluous feedback, but if it's
 	 * because of a timeout we need to, otherwise wal_sender_timeout will kill
@@ -133,10 +134,10 @@ sendFeedback(PGconn *conn, TimestampTz now, bool force, bool replyRequested)
 
 	if (verbose)
 		fprintf(stderr,
-				_("%s: confirming write up to %X/%X, flush to %X/%X (slot %s)\n"),
+				_("%s: confirming write up to %lu, flush to %lu (slot %s)\n"),
 				progname,
-				(uint32) (output_written_lsn >> 32), (uint32) output_written_lsn,
-				(uint32) (output_fsync_lsn >> 32), (uint32) output_fsync_lsn,
+				 output_written_lsn,
+				 output_fsync_lsn,
 				replication_slot);
 
 	replybuf[len] = 'r';
@@ -152,7 +153,10 @@ sendFeedback(PGconn *conn, TimestampTz now, bool force, bool replyRequested)
 	replybuf[len] = replyRequested ? 1 : 0; /* replyRequested */
 	len += 1;
 
+	fprintf(stderr, _("Sid: sendTime to server: %ld\n"), now);
+
 	startpos = output_written_lsn;
+	fprintf(stderr, _("Sid: Updating startpos to %lu\n"), startpos);
 	last_written_lsn = output_written_lsn;
 	last_fsync_lsn = output_fsync_lsn;
 
@@ -178,21 +182,28 @@ disconnect_and_exit(int code)
 static bool
 OutputFsync(TimestampTz now)
 {
+	fprintf(stderr, _("Sid: inside OutputFsync\n"));
 	output_last_fsync = now;
 
 	output_fsync_lsn = output_written_lsn;
 
-	if (fsync_interval <= 0)
+	if (fsync_interval <= 0) {
+		fprintf(stderr, _("Sid: fsync_interval is <= 0, returning true from OutputFsync\n"));
 		return true;
+	}
 
-	if (!output_needs_fsync)
+	if (!output_needs_fsync) {
+		fprintf(stderr, _("Sid: output_needs_fsync is false, returning\n"));
 		return true;
+	}
 
 	output_needs_fsync = false;
 
 	/* can only fsync if it's a regular file */
-	if (!output_isfile)
+	if (!output_isfile) {
+		fprintf(stderr, _("Sid: Output is not a file, returning from OutputFsync\n"));
 		return true;
+	}
 
 	if (fsync(outfd) != 0)
 	{
@@ -201,6 +212,8 @@ OutputFsync(TimestampTz now)
 				progname, outfile, strerror(errno));
 		return false;
 	}
+
+	fprintf(stderr, _("Sid: returning from OutputFsync\n"));
 
 	return true;
 }
@@ -216,9 +229,11 @@ StreamLogicalLog(void)
 	TimestampTz last_status = -1;
 	int			i;
 	PQExpBuffer query;
+	fprintf(stderr, _("Sid: Inside StreamLogicalLog\n"));
 
 	output_written_lsn = InvalidXLogRecPtr;
 	output_fsync_lsn = InvalidXLogRecPtr;
+	fprintf(stderr, _("Sid: output_written_lsn & output_fsync_lsn set to InvalidXLogRecPtr\n"));
 
 	query = createPQExpBuffer();
 
@@ -265,6 +280,7 @@ StreamLogicalLog(void)
 	if (noptions)
 		appendPQExpBufferChar(query, ')');
 
+	fprintf(stderr, _("Sid: Final Query: %s\n"), query->data);
 	res = PQexec(conn, query->data);
 	if (PQresultStatus(res) != PGRES_COPY_BOTH)
 	{
@@ -290,6 +306,7 @@ StreamLogicalLog(void)
 		int			hdr_len;
 		XLogRecPtr	cur_record_lsn = InvalidXLogRecPtr;
 
+		fprintf(stderr, _("Sid: in the loop\n"));
 		if (copybuf != NULL)
 		{
 			PQfreemem(copybuf);
@@ -305,27 +322,60 @@ StreamLogicalLog(void)
 			feTimestampDifferenceExceeds(output_last_fsync, now,
 										 fsync_interval))
 		{
-			if (!OutputFsync(now))
+			fprintf(stderr, _("Sid: outfd = %d\n"), outfd);
+			fprintf(stderr, _("Sid: feTimestampDifferenceExceeds is true\n"));
+			fprintf(stderr, _("Sid: calling OutputFsync\n"));
+			if (!OutputFsync(now)) {
+				fprintf(stderr, _("Sid: OutputFsync failed. Going to error\n"));
 				goto error;
+			}
 		}
 
 		if (standby_message_timeout > 0 &&
 			feTimestampDifferenceExceeds(last_status, now,
 										 standby_message_timeout))
 		{
+			fprintf(stderr, _("Sid: Calling sendFeedback with force=true and replyRequested=false\n"));
 			/* Time to send feedback! */
-			if (!sendFeedback(conn, now, true, false))
+			if (!sendFeedback(conn, now, true, false)) {
+				fprintf(stderr, _("Sid: sendFeedback failed. Going to error\n"));
 				goto error;
+			}
 
 			last_status = now;
 		}
+
+
+		// PG
+		// start streaming
+		// SF
+		// OFS
+		// KA
+		// OFS
+		// SF
+
+		// POC (5s sleep in walsender)
+		// start streaming
+		// SF
+		// OFS
+		// KA
+		// SF 
+		// restart
+		// OFS // value is updating here
+
+		// 
+
 
 		/* got SIGHUP, close output file */
 		if (outfd != -1 && output_reopen && strcmp(outfile, "-") != 0)
 		{
 			now = feGetCurrentTimestamp();
-			if (!OutputFsync(now))
+			fprintf(stderr, _("Sid: got SIGHUP, close output file\n"));
+			fprintf(stderr, _("Sid: calling OutputFsync\n"));
+			if (!OutputFsync(now)) {
+				fprintf(stderr, _("Sid: OutputFsync failed. Going to error\n"));
 				goto error;
+			}
 			close(outfd);
 			outfd = -1;
 		}
@@ -358,6 +408,7 @@ StreamLogicalLog(void)
 		}
 
 		r = PQgetCopyData(conn, &copybuf, 1);
+		fprintf(stderr, _("Sid: r = %d\n"), r);
 		if (r == 0)
 		{
 			/*
@@ -383,14 +434,18 @@ StreamLogicalLog(void)
 			FD_SET(PQsocket(conn), &input_mask);
 
 			/* Compute when we need to wakeup to send a keepalive message. */
-			if (standby_message_timeout)
+			if (standby_message_timeout) {
+				fprintf(stderr, _("Sid: computing when to send ack\n"));
 				message_target = last_status + (standby_message_timeout - 1) *
 					((int64) 1000);
+			}
 
 			/* Compute when we need to wakeup to fsync the output file. */
-			if (fsync_interval > 0 && output_needs_fsync)
+			if (fsync_interval > 0 && output_needs_fsync) {
+				fprintf(stderr, _("Sid: computing when to fsync\n"));
 				fsync_target = output_last_fsync + (fsync_interval - 1) *
 					((int64) 1000);
+			}
 
 			/* Now compute when to wakeup. */
 			if (message_target > 0 || fsync_target > 0)
@@ -398,6 +453,12 @@ StreamLogicalLog(void)
 				TimestampTz targettime;
 				long		secs;
 				int			usecs;
+
+				if(message_target > 0)
+					fprintf(stderr, _("Sid: message_target > 0\n"));
+
+				if(fsync_target > 0)
+					fprintf(stderr, _("Sid: fsync_target > 0\n"));
 
 				targettime = message_target;
 
@@ -416,9 +477,11 @@ StreamLogicalLog(void)
 				timeoutptr = &timeout;
 			}
 
+			fprintf(stderr, _("Sid: timeoutptr.tv_sec: %ld\n"), timeoutptr->tv_sec);
 			r = select(PQsocket(conn) + 1, &input_mask, NULL, NULL, timeoutptr);
 			if (r == 0 || (r < 0 && errno == EINTR))
 			{
+				fprintf(stderr, _("Sid: select returned r <= 0, continuing\n"));
 				/*
 				 * Got a timeout or signal. Continue the loop and either
 				 * deliver a status packet to the server or just go back into
@@ -441,6 +504,7 @@ StreamLogicalLog(void)
 						progname, PQerrorMessage(conn));
 				goto error;
 			}
+			fprintf(stderr, _("Sid: continue\n"));
 			continue;
 		}
 
@@ -471,7 +535,10 @@ StreamLogicalLog(void)
 			 */
 			pos = 1;			/* skip msgtype 'k' */
 			walEnd = fe_recvint64(&copybuf[pos]);
+			fprintf(stderr, _("Sid: walend: %lu\n"), walEnd);
+			fprintf(stderr, _("Sid: Previous output_written_lsn value: %lu\n"), output_written_lsn);
 			output_written_lsn = Max(walEnd, output_written_lsn);
+			fprintf(stderr, _("Sid: Updated output_written_lsn value: %lu\n"), output_written_lsn);
 
 			pos += 8;			/* read walEnd */
 
@@ -536,8 +603,10 @@ StreamLogicalLog(void)
 			goto error;
 		}
 
+		fprintf(stderr, _("Sid: Recieved data in the copy buffer\n"));
 		/* Extract WAL location for this block */
 		cur_record_lsn = fe_recvint64(&copybuf[1]);
+		fprintf(stderr, _("Sid: cur_record_lsn: %lu\n"), cur_record_lsn);
 
 		if (endpos != InvalidXLogRecPtr && cur_record_lsn > endpos)
 		{
@@ -545,6 +614,7 @@ StreamLogicalLog(void)
 			 * We've read past our endpoint, so prepare to go away being
 			 * cautious about what happens to our output data.
 			 */
+			fprintf(stderr, _("Sid: cur_record_lsn > endpos, calling flushAndSendFeedback\n"));
 			if (!flushAndSendFeedback(conn, &now))
 				goto error;
 			prepareToTerminate(conn, endpos, false, cur_record_lsn);
@@ -553,7 +623,8 @@ StreamLogicalLog(void)
 		}
 
 		output_written_lsn = Max(cur_record_lsn, output_written_lsn);
-
+		fprintf(stderr, _("Sid: output_written_lsn: %lu\n"), output_written_lsn);
+		fprintf(stderr, _("Sid: endpos: %lu\n"), endpos);
 		bytes_left = r - hdr_len;
 		bytes_written = 0;
 
@@ -593,6 +664,7 @@ StreamLogicalLog(void)
 
 		if (endpos != InvalidXLogRecPtr && cur_record_lsn == endpos)
 		{
+			fprintf(stderr, _("Sid: cur_record_lsn == endpos condition hit. Calling flushAndSendFeedback\n"));
 			/* endpos was exactly the record we just processed, we're done */
 			if (!flushAndSendFeedback(conn, &now))
 				goto error;
@@ -600,6 +672,7 @@ StreamLogicalLog(void)
 			time_to_abort = true;
 			break;
 		}
+		fprintf(stderr, _("Sid: loop execution done\n"));
 	}
 
 	res = PQgetResult(conn);
@@ -625,6 +698,8 @@ StreamLogicalLog(void)
 	{
 		TimestampTz t = feGetCurrentTimestamp();
 
+		fprintf(stderr, _("Sid: outfile != '-'\n"));
+		fprintf(stderr, _("Sid: Calling OutputFsync"));
 		/* no need to jump to error on failure here, we're finishing anyway */
 		OutputFsync(t);
 
@@ -639,6 +714,7 @@ error:
 		PQfreemem(copybuf);
 		copybuf = NULL;
 	}
+	fprintf(stderr, _("Sid: Error occured"));
 	destroyPQExpBuffer(query);
 	PQfinish(conn);
 	conn = NULL;
@@ -1038,10 +1114,13 @@ main(int argc, char **argv)
 static bool
 flushAndSendFeedback(PGconn *conn, TimestampTz *now)
 {
+	fprintf(stderr, _("Sid: inside flushAndSendFeedback"));
+	fprintf(stderr, _("Sid: Calling OutputFsync"));
 	/* flush data to disk, so that we send a recent flush pointer */
 	if (!OutputFsync(*now))
 		return false;
 	*now = feGetCurrentTimestamp();
+	fprintf(stderr, _("Sid: Calling sendFeedback"));
 	if (!sendFeedback(conn, *now, true, false))
 		return false;
 
