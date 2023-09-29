@@ -2272,7 +2272,7 @@ Status PgApiImpl::CDCGetChanges(const string& stream_id, const string& tablet_id
   YBCCDCSDKCheckpoint* new_checkpoint = (YBCCDCSDKCheckpoint *)malloc(sizeof(YBCCDCSDKCheckpoint));
 
   cdc::CDCSDKCheckpointPB checkpoint = change_resp.cdc_sdk_checkpoint();
-  LOG(INFO) << "Sid: Checkpoint values from GetChanges: " << checkpoint.DebugString();
+  // LOG(INFO) << "Sid: Checkpoint values from GetChanges: " << checkpoint.DebugString();
   if(checkpoint.index() >= 0 && ((unsigned int)checkpoint.index() != cdcsdk_checkpoint->index)) {
     LOG(INFO) << "Sid: Received a different index in checkpoint";
   }
