@@ -990,9 +990,9 @@ CreateReplicationSlot(CreateReplicationSlotCmd *cmd)
 			ReplicationSlotSave();
 	}
 
-	ereport(LOG, (errmsg("Sid: MyReplicationSlot->data.confirmed_flush: %X/%X",
+	snprintf(xloc, sizeof(xloc), "%X/%X",
 			 (uint32) (MyReplicationSlot->data.confirmed_flush >> 32),
-			 (uint32) MyReplicationSlot->data.confirmed_flush)));
+			 (uint32) MyReplicationSlot->data.confirmed_flush);
 
 	dest = CreateDestReceiver(DestRemoteSimple);
 	MemSet(nulls, false, sizeof(nulls));
