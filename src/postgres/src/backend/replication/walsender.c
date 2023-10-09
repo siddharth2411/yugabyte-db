@@ -2969,26 +2969,31 @@ XLogSendLogical(void)
 
 			
 		}
-		for(int i = 0; i < num_attributes; i++) {
-			ereport(LOG, (errmsg("Sid: datum values[%d]: %lu", i, datums[i])));
-		}
+		// for(int i = 0; i < num_attributes; i++) {
+		// 	ereport(LOG, (errmsg("Sid: datum values[%d]: %lu", i, datums[i])));
+		// }
 
 		txn->xid = row.transaction_id;
+		txn->origin_id = 0;
+		txn->origin_lsn = 0;
 		logical_decoding_ctx->write_xid = txn->xid;
 		logical_decoding_ctx->accept_writes = true;
 		
 		ereport(LOG, (errmsg("Sid: Processing action: %s", row.action)));
-		
+	
 		if (!strcmp(row.action, "BEGIN")) {
 			ereport(LOG, (errmsg("Sid: Begin CB")));
-			logical_decoding_ctx->write_location = response.rows[i+1].record_op_id_index;	
+			txn->commit_time = row.commit_time;
+			txn->first_lsn = response.rows[i+1].record_op_id_index;
+			txn->final_lsn = response.rows[i+1].record_op_id_index;
+			txn->end_lsn = cdc_sdk_checkpoint.index;
+			logical_decoding_ctx->write_location = txn->first_lsn;	
 			ereport(LOG, (errmsg("Sid: ctx->write.location: %lu", logical_decoding_ctx->write_location)));
 			logical_decoding_ctx->callbacks.begin_cb(logical_decoding_ctx, txn);
 		}
 		else if (!strcmp(row.action, "COMMIT")) {
 			ereport(LOG, (errmsg("Commit CB")));
-			txn->commit_time = row.commit_time;
-			logical_decoding_ctx->write_location = row.record_op_id_index;
+			logical_decoding_ctx->write_location = txn->end_lsn;
 			ereport(LOG, (errmsg("Sid: ctx->write.location: %lu", logical_decoding_ctx->write_location)));
 			logical_decoding_ctx->callbacks.commit_cb(logical_decoding_ctx, txn, 0);
 		}
@@ -3001,9 +3006,11 @@ XLogSendLogical(void)
 			new_tuple->tuple = *head_tuple;
 			change->data.tp.newtuple = new_tuple; 
 			change->data.tp.oldtuple = NULL;
-			logical_decoding_ctx->write_location = row.record_op_id_index;
+			change->lsn = row.record_op_id_index;
+			logical_decoding_ctx->write_location = change->lsn;
 			ereport(LOG, (errmsg("Sid: ctx->write.location: %lu", logical_decoding_ctx->write_location)));
 			logical_decoding_ctx->callbacks.change_cb(logical_decoding_ctx, txn, relation, change);
+			
 		}
 		else {
 			ereport(LOG, (errmsg("Sid: Unsupported action: %s", row.action)));
