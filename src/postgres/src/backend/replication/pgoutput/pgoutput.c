@@ -211,6 +211,7 @@ static void
 pgoutput_begin_txn(LogicalDecodingContext *ctx, ReorderBufferTXN *txn)
 {
 	bool		send_replication_origin = txn->origin_id != InvalidRepOriginId;
+	ereport(LOG, (errmsg("Sid: inside pgoutput_begin_txn")));
 
 	OutputPluginPrepareWrite(ctx, !send_replication_origin);
 	logicalrep_write_begin(ctx->out, txn);
@@ -265,6 +266,7 @@ maybe_send_schema(LogicalDecodingContext *ctx,
 	{
 		TupleDesc	desc;
 		int			i;
+		ereport(LOG, (errmsg("Sid: schema_sent is false")));
 
 		desc = RelationGetDescr(relation);
 
@@ -282,16 +284,20 @@ maybe_send_schema(LogicalDecodingContext *ctx,
 			if (att->atttypid < FirstNormalObjectId)
 				continue;
 
+			ereport(LOG, (errmsg("Sid: calling logicalrep_write_typ")));
 			OutputPluginPrepareWrite(ctx, false);
 			logicalrep_write_typ(ctx->out, att->atttypid);
 			OutputPluginWrite(ctx, false);
+			ereport(LOG, (errmsg("Sid: logicalrep_write_typ execution completed")));
 		}
 
+		ereport(LOG, (errmsg("Sid: sending RELATION message")));
 		OutputPluginPrepareWrite(ctx, false);
 		logicalrep_write_rel(ctx->out, relation);
 		OutputPluginWrite(ctx, false);
 		relentry->schema_sent = true;
 	}
+	ereport(LOG, (errmsg("Sid: maybe_send_schema execution completed")));
 }
 
 /*
@@ -338,10 +344,12 @@ pgoutput_change(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 	switch (change->action)
 	{
 		case REORDER_BUFFER_CHANGE_INSERT:
+			ereport(LOG, (errmsg("Sid: calling logicalrep_write_insert")));
 			OutputPluginPrepareWrite(ctx, true);
 			logicalrep_write_insert(ctx->out, relation,
 									&change->data.tp.newtuple->tuple);
 			OutputPluginWrite(ctx, true);
+			ereport(LOG, (errmsg("Sid: logicalrep_write_insert execution completed")));
 			break;
 		case REORDER_BUFFER_CHANGE_UPDATE:
 			{

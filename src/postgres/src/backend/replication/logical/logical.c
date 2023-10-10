@@ -427,6 +427,8 @@ CreateDecodingContext(XLogRecPtr start_lsn,
 
 	ctx->reorder->output_rewrites = ctx->options.receive_rewrites;
 
+	slot->data.restart_lsn = 0;
+	slot->data.confirmed_flush = 0;
 	ereport(LOG,
 			(errmsg("starting logical decoding for slot \"%s\"",
 					NameStr(slot->data.name)),
@@ -435,6 +437,9 @@ CreateDecodingContext(XLogRecPtr start_lsn,
 					   (uint32) slot->data.confirmed_flush,
 					   (uint32) (slot->data.restart_lsn >> 32),
 					   (uint32) slot->data.restart_lsn)));
+
+	
+	
 
 	return ctx;
 }

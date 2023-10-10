@@ -1117,8 +1117,8 @@ StartLogicalReplication(StartReplicationCmd *cmd)
 	 * Report the location after which we'll send out further commits as the
 	 * current sentPtr.
 	 */
-	// sentPtr = MyReplicationSlot->data.confirmed_flush;
-	sentPtr = 0;
+	sentPtr = MyReplicationSlot->data.confirmed_flush;
+	// sentPtr = 0;
 	ereport(LOG, (errmsg("Sid: sentPtr: %lu", sentPtr)));
 
 	/* Also update the sent position status in shared memory */
@@ -1177,7 +1177,7 @@ static void
 WalSndPrepareWrite(LogicalDecodingContext *ctx, XLogRecPtr lsn, TransactionId xid, bool last_write)
 {
 	// elog(INFO, "WalSndPrepareWrite lsn: %ld", lsn);
-	ereport(LOG,(errmsg("Sid: inside WalSndPrepareWrite")));
+	ereport(LOG,(errmsg("Sid: inside WalSndPrepareWrite with last_write: %s", last_write ? "true" : "false")));
 	ereport(LOG, (errmsg("Sid: LSN: %lu", lsn)));
 	/* can't have sync rep confused by sending the same LSN several times */
 	if (!last_write)
@@ -2995,7 +2995,7 @@ XLogSendLogical(void)
 			ereport(LOG, (errmsg("Commit CB")));
 			logical_decoding_ctx->write_location = txn->end_lsn;
 			ereport(LOG, (errmsg("Sid: ctx->write.location: %lu", logical_decoding_ctx->write_location)));
-			logical_decoding_ctx->callbacks.commit_cb(logical_decoding_ctx, txn, 0);
+			logical_decoding_ctx->callbacks.commit_cb(logical_decoding_ctx, txn, txn->final_lsn);
 		}
 		else if (!strcmp(row.action, "INSERT") || !strcmp(row.action, "UPDATE") || !strcmp(row.action, "DELETE")) {
 			ereport(LOG, (errmsg("Sid: Change CB: %s", row.action)));

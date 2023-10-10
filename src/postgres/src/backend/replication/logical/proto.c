@@ -47,6 +47,7 @@ logicalrep_write_begin(StringInfo out, ReorderBufferTXN *txn)
 {
 	pq_sendbyte(out, 'B');		/* BEGIN */
 
+	ereport(LOG, (errmsg("Sid: sending the following fields in BEGIN: txn->final_lsn: %lu, txn->commit_time: %ld, txn->xid: %d", txn->final_lsn, txn->commit_time, txn->xid)));
 	/* fixed fields */
 	pq_sendint64(out, txn->final_lsn);
 	pq_sendint64(out, txn->commit_time);
@@ -77,7 +78,8 @@ logicalrep_write_commit(StringInfo out, ReorderBufferTXN *txn,
 {
 	uint8		flags = 0;
 
-	pq_sendbyte(out, 'C');		/* sending COMMIT */
+	pq_sendbyte(out, 'C');
+	ereport(LOG, (errmsg("Sid: sending the following fields from logicalrep_write_commit: commit_lsn: %lu, txn->end_lsn: %lu, txn->commit_time: %ld", commit_lsn, txn->end_lsn, txn->commit_time)));		/* sending COMMIT */
 
 	/* send the flags field (unused for now) */
 	pq_sendbyte(out, flags);
