@@ -1145,7 +1145,7 @@ StartLogicalReplication(StartReplicationCmd *cmd)
 	ereport(LOG, (errmsg("Sid: YBCPgCDCSetCheckpoint execution completed")));
 
 	cdc_sdk_checkpoint.index = sentPtr;
-	ereport(LOG, (errmsg("Sid: Setting cdc_sdk_checkpoint.index to: %llu", cdc_sdk_checkpoint.index)));
+	ereport(LOG, (errmsg("Sid: Setting cdc_sdk_checkpoint.index to: %lu", cdc_sdk_checkpoint.index)));
 	
 
 	ereport(LOG,(errmsg("Sid: Calling WalSndLoop with XLogSendLogical as callback")));
@@ -2923,7 +2923,7 @@ XLogSendLogical(void)
 	// elog(INFO, "\nGetChanges()");
 
 	cdc_sdk_checkpoint = *(response.checkpoint);
-	ereport(LOG, (errmsg("Sid: checkpoint index: %llu", cdc_sdk_checkpoint.index)));
+	ereport(LOG, (errmsg("Sid: checkpoint index: %lu", cdc_sdk_checkpoint.index)));
 	// ereport(LOG, (errmsg("Sid: Checkpoint values: index: %lld, term: %lld, key: %s, write_id: %d", cdc_sdk_checkpoint.index, cdc_sdk_checkpoint.term, cdc_sdk_checkpoint.key, cdc_sdk_checkpoint.write_id)));
 
 
@@ -2953,7 +2953,7 @@ XLogSendLogical(void)
 
 		for (int j = 0; j < row.col_count; j++) {
 			YBCDatumMessage col = row.cols[j];
-			ereport(LOG, (errmsg("Sid: Processing column %d: name %s, type: %d datum: %lld is_null: %d", j, col.column_name, (Oid) col.column_type, col.datum, col.is_null)));
+			ereport(LOG, (errmsg("Sid: Processing column %d: name %s, type: %d datum: %lu is_null: %d", j, col.column_name, (Oid) col.column_type, col.datum, col.is_null)));
 			int k = 0;
 			for(k = 0; k < num_attributes; k++) {
 				ereport(LOG, (errmsg("Looking up attribute %d with name %s", k, tupdesc->attrs[k].attname.data)));
@@ -2987,6 +2987,9 @@ XLogSendLogical(void)
 			txn->first_lsn = response.rows[i+1].record_op_id_index;
 			txn->final_lsn = response.rows[i+1].record_op_id_index;
 			txn->end_lsn = cdc_sdk_checkpoint.index;
+			// txn->first_lsn = 3;
+			// txn->final_lsn = 4;
+			// txn->end_lsn = 5;
 			logical_decoding_ctx->write_location = txn->first_lsn;	
 			ereport(LOG, (errmsg("Sid: ctx->write.location: %lu", logical_decoding_ctx->write_location)));
 			logical_decoding_ctx->callbacks.begin_cb(logical_decoding_ctx, txn);
@@ -3007,6 +3010,7 @@ XLogSendLogical(void)
 			change->data.tp.newtuple = new_tuple; 
 			change->data.tp.oldtuple = NULL;
 			change->lsn = row.record_op_id_index;
+			// change->lsn = 3;
 			logical_decoding_ctx->write_location = change->lsn;
 			ereport(LOG, (errmsg("Sid: ctx->write.location: %lu", logical_decoding_ctx->write_location)));
 			logical_decoding_ctx->callbacks.change_cb(logical_decoding_ctx, txn, relation, change);

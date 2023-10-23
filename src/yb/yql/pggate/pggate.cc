@@ -2138,7 +2138,7 @@ Result<boost::container::small_vector<RefCntSlice, 2>> PgApiImpl::GetTableKeyRan
 
 Status PgApiImpl::CDCGetStreamId(master::ListCDCStreamsResponsePB* resp) {
   HostPort host_port;
-  CHECK_OK(host_port.ParseString("192.168.1.11", 7100));
+  CHECK_OK(host_port.ParseString("172.165.27.8", 7100));
   LOG(INFO) <<"Sid: HostPort: " << host_port.ToString();
   std::unique_ptr<master::MasterReplicationProxy> master_replication_proxy_;
   master_replication_proxy_ = std::make_unique<master::MasterReplicationProxy>(
@@ -2164,7 +2164,7 @@ Status PgApiImpl::CDCGetTabletListToPoll(
     const string& stream_id, const string& table_id,
     cdc::GetTabletListToPollForCDCResponsePB* get_tablet_list_resp) {
   HostPort host_port;
-  CHECK_OK(host_port.ParseString("192.168.1.11", 9100));
+  CHECK_OK(host_port.ParseString("172.165.27.8", 9100));
   LOG(INFO) <<"Sid: HostPort: " << host_port.ToString();
   std::unique_ptr<cdc::CDCServiceProxy> cdc_proxy =
       std::make_unique<cdc::CDCServiceProxy>(proxy_cache_.get(), host_port);
@@ -2190,7 +2190,7 @@ Status PgApiImpl::CDCGetTabletListToPoll(
 Status PgApiImpl::CDCSetCheckpoint(const string& stream_id, const string& tablet_id) {
 
   HostPort host_port;
-  CHECK_OK(host_port.ParseString("192.168.1.11", 9100));
+  CHECK_OK(host_port.ParseString("172.165.27.8", 9100));
   LOG(INFO) <<"Sid: HostPort: " << host_port.ToString();
   std::unique_ptr<cdc::CDCServiceProxy> cdc_proxy =
       std::make_unique<cdc::CDCServiceProxy>(proxy_cache_.get(), host_port);
@@ -2221,7 +2221,7 @@ Status PgApiImpl::CDCGetChanges(const string& stream_id, const string& tablet_id
   YBCCDCSDKCheckpoint* cdcsdk_checkpoint, YBCGetChangesResponse* response) {
   LOG(INFO) << "Sid CDCGetChanges";
   HostPort host_port;
-  CHECK_OK(host_port.ParseString("192.168.1.11", 9100));
+  CHECK_OK(host_port.ParseString("172.165.27.8", 9100));
   LOG(INFO) <<"Sid: HostPort: " << host_port.ToString();
   // CHECK_OK(host_port.ParseString("0.0.0.0:9100", 0));
   //  host_port.set_port(PggateOptions::kDefaultPort);
@@ -2352,7 +2352,8 @@ Status PgApiImpl::CDCGetChanges(const string& stream_id, const string& tablet_id
 
     if (row_message.has_transaction_id()) {
       LOG(INFO) << "Transaction id: " << row_message.transaction_id();
-      rows[i].transaction_id = static_cast<uint32_t>(std::stoul(row_message.transaction_id()));  // std::stoi(row_message.transaction_id());  // does it work?
+      rows[i].transaction_id = 1;
+      // rows[i].transaction_id = static_cast<uint32_t>(std::stoul(row_message.transaction_id()));  // std::stoi(row_message.transaction_id());  // does it work?
     } else {
       rows[i].transaction_id = 1;
     }

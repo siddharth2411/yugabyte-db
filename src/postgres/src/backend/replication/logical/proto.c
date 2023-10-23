@@ -357,6 +357,7 @@ logicalrep_write_rel(StringInfo out, Relation rel)
 {
 	char	   *relname;
 
+	ereport(LOG, (errmsg("Sid: sending RELATION message")));
 	pq_sendbyte(out, 'R');		/* sending RELATION */
 
 	/* use Oid as relation identifier */
@@ -365,8 +366,10 @@ logicalrep_write_rel(StringInfo out, Relation rel)
 	/* send qualified relation name */
 	logicalrep_write_namespace(out, RelationGetNamespace(rel));
 	relname = RelationGetRelationName(rel);
+	ereport(LOG, (errmsg("Sid: sending relname: %s", relname)));
 	pq_sendstring(out, relname);
 
+	ereport(LOG, (errmsg("Sid: sending replica identity: %c", rel->rd_rel->relreplident)));
 	/* send replica identity */
 	pq_sendbyte(out, rel->rd_rel->relreplident);
 
@@ -393,6 +396,12 @@ logicalrep_read_rel(StringInfo in)
 
 	/* Get attribute description */
 	logicalrep_read_attrs(in, rel);
+	ereport(LOG, (errmsg("Sid: LogicalRepRelation struct: rel->remoteid: %d, rel->nspname: %s, rel->relname: %s, rel->replident: %c, rel->natts: %d",
+	rel->remoteid, rel->nspname, rel->relname, rel->replident, rel->natts )));
+	ereport(LOG, (errmsg("Sid: att_names: ")));
+	for(int i = 0; i < rel->natts; i++) {
+	ereport(LOG, (errmsg("att_name: %c", *rel->attnames[i])));
+	}
 
 	return rel;
 }
@@ -497,8 +506,11 @@ logicalrep_write_tuple(StringInfo out, Relation rel, HeapTuple tuple)
 
 		pq_sendbyte(out, 't');	/* 'text' data follows */
 
+		ereport(LOG, (errmsg("Sid: values[i]: %lu", values[i])));
+		ereport(LOG, (errmsg("Sid: typclass->typoutput: %u", typclass->typoutput)));
 		outputstr = OidOutputFunctionCall(typclass->typoutput, values[i]);
 		pq_sendcountedtext(out, outputstr, strlen(outputstr), false);
+		ereport(LOG, (errmsg("Sid: sending tuple value: %s", outputstr)));
 		pfree(outputstr);
 
 		ReleaseSysCache(typtup);
@@ -602,6 +614,15 @@ logicalrep_write_attrs(StringInfo out, Relation rel)
 						  idattrs))
 			flags |= LOGICALREP_IS_REPLICA_IDENTITY;
 
+		ereport(LOG, (errmsg("Sid: flags value: %d", flags)));
+
+		if(!strcmp(NameStr(att->attname), "k")) {
+			flags = 1;
+		}
+		else {
+			flags = 0;
+		}
+
 		pq_sendbyte(out, flags);
 
 		/* attribute name */
@@ -612,6 +633,7 @@ logicalrep_write_attrs(StringInfo out, Relation rel)
 
 		/* attribute mode */
 		pq_sendint32(out, att->atttypmod);
+		ereport(LOG, (errmsg("Sid: sending the following from write_attr: flags: %d, att_name: %s att_type_id: %d att_mode: %d", flags, NameStr(att->attname), (int) att->atttypid, att->atttypmod)));
 	}
 
 	bms_free(idattrs);
@@ -640,14 +662,18 @@ logicalrep_read_attrs(StringInfo in, LogicalRepRelation *rel)
 
 		/* Check for replica identity column */
 		flags = pq_getmsgbyte(in);
-		if (flags & LOGICALREP_IS_REPLICA_IDENTITY)
+		if (flags & LOGICALREP_IS_REPLICA_IDENTITY) {
+			ereport(LOG, (errmsg("Sid: flags & rep_identity is 1, adding to attkeys")));
 			attkeys = bms_add_member(attkeys, i);
+		}
 
 		/* attribute name */
 		attnames[i] = pstrdup(pq_getmsgstring(in));
 
 		/* attribute type id */
 		atttyps[i] = (Oid) pq_getmsgint(in, 4);
+
+		ereport(LOG, (errmsg("Sid: flag: %d, att_name: %s att_type: %d", flags, attnames[i], atttyps[i])));
 
 		/* we ignore attribute mode for now */
 		(void) pq_getmsgint(in, 4);
@@ -665,8 +691,10 @@ logicalrep_read_attrs(StringInfo in, LogicalRepRelation *rel)
 static void
 logicalrep_write_namespace(StringInfo out, Oid nspid)
 {
-	if (nspid == PG_CATALOG_NAMESPACE)
+	if (nspid == PG_CATALOG_NAMESPACE) {
+		ereport(LOG, (errmsg("Sid: sending catalog namespace: \\0")));
 		pq_sendbyte(out, '\0');
+	}
 	else
 	{
 		char	   *nspname = get_namespace_name(nspid);
@@ -675,6 +703,7 @@ logicalrep_write_namespace(StringInfo out, Oid nspid)
 			elog(ERROR, "cache lookup failed for namespace %u",
 				 nspid);
 
+		ereport(LOG, (errmsg("Sid: sending the following namespace: %s", nspname)));
 		pq_sendstring(out, nspname);
 	}
 }
