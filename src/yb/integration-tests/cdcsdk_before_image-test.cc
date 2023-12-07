@@ -1795,8 +1795,8 @@ TEST_F(CDCSDKYsqlTest, TestCompactionWithConsistentSnapshotAndBeforeImage) {
   ASSERT_RESULT(CreateDBStream());
 
   ASSERT_OK(WriteRows(1 /* start */, 101 /* end */, &test_cluster_));
-  xrepl::StreamId stream_id = ASSERT_RESULT(CreateConsistentSnapshotStream(CDCSDKSnapshotOption::USE_SNAPSHOT,
-    CDCCheckpointType::EXPLICIT, CDCRecordType::PG_FULL));
+  xrepl::StreamId stream_id = ASSERT_RESULT(CreateConsistentSnapshotStream(
+      CDCSDKSnapshotOption::USE_SNAPSHOT, CDCCheckpointType::EXPLICIT, CDCRecordType::PG_FULL));
 
   // GetCheckpoint after snapshot bootstrap (done as part of stream creation itself).
   auto cp_resp = ASSERT_RESULT(GetCDCSDKSnapshotCheckpoint(stream_id, tablets[0].tablet_id()));
@@ -1928,8 +1928,9 @@ TEST_F(CDCSDKYsqlTest, TestHistoryRetentionWithNoExportConsistentSnapshotAndBefo
   ASSERT_RESULT(CreateDBStream());
 
   ASSERT_OK(WriteRows(1 /* start */, 101 /* end */, &test_cluster_));
-  xrepl::StreamId stream_id = ASSERT_RESULT(CreateConsistentSnapshotStream(CDCSDKSnapshotOption::NOEXPORT_SNAPSHOT,
-    CDCCheckpointType::EXPLICIT, CDCRecordType::PG_FULL));
+  xrepl::StreamId stream_id = ASSERT_RESULT(CreateConsistentSnapshotStream(
+      CDCSDKSnapshotOption::NOEXPORT_SNAPSHOT, CDCCheckpointType::EXPLICIT,
+      CDCRecordType::PG_FULL));
   // Read from cdc_state
   auto expected_row = ReadFromCdcStateTable(stream_id, tablets[0].tablet_id());
   if (!expected_row.ok()) {
