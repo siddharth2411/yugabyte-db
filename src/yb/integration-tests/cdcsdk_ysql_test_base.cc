@@ -887,19 +887,30 @@ namespace cdc {
   void CDCSDKYsqlTest::PrepareChangeRequestWithExplicitCheckpoint(
       GetChangesRequestPB* change_req, const xrepl::StreamId& stream_id,
       const google::protobuf::RepeatedPtrField<master::TabletLocationsPB>& tablets,
-      const CDCSDKCheckpointPB& cp, const int tablet_idx) {
+      const CDCSDKCheckpointPB* from_op_id, const CDCSDKCheckpointPB* explicit_checkpoint,
+      const TableId table_id, const int tablet_idx) {
     change_req->set_stream_id(stream_id.ToString());
     change_req->set_tablet_id(tablets.Get(tablet_idx).tablet_id());
 
-    change_req->mutable_from_cdc_sdk_checkpoint()->set_term(cp.term());
-    change_req->mutable_from_cdc_sdk_checkpoint()->set_index(cp.index());
-    change_req->mutable_from_cdc_sdk_checkpoint()->set_key(cp.key());
-    change_req->mutable_from_cdc_sdk_checkpoint()->set_write_id(cp.write_id());
+    change_req->mutable_from_cdc_sdk_checkpoint()->set_term(from_op_id->term());
+    change_req->mutable_from_cdc_sdk_checkpoint()->set_index(from_op_id->index());
+    change_req->mutable_from_cdc_sdk_checkpoint()->set_key(from_op_id->key());
+    change_req->mutable_from_cdc_sdk_checkpoint()->set_write_id(from_op_id->write_id());
+    change_req->mutable_from_cdc_sdk_checkpoint()->set_snapshot_time(from_op_id->snapshot_time());
 
-    change_req->mutable_explicit_cdc_sdk_checkpoint()->set_term(cp.term());
-    change_req->mutable_explicit_cdc_sdk_checkpoint()->set_index(cp.index());
-    change_req->mutable_explicit_cdc_sdk_checkpoint()->set_key(cp.key());
-    change_req->mutable_explicit_cdc_sdk_checkpoint()->set_write_id(cp.write_id());
+    if (explicit_checkpoint != nullptr) {
+      change_req->mutable_explicit_cdc_sdk_checkpoint()->set_term(explicit_checkpoint->term());
+      change_req->mutable_explicit_cdc_sdk_checkpoint()->set_index(explicit_checkpoint->index());
+      change_req->mutable_explicit_cdc_sdk_checkpoint()->set_key(explicit_checkpoint->key());
+      change_req->mutable_explicit_cdc_sdk_checkpoint()->set_write_id(
+        explicit_checkpoint->write_id());
+      change_req->mutable_explicit_cdc_sdk_checkpoint()->set_snapshot_time(
+        explicit_checkpoint->snapshot_time());
+    }
+
+    if (!table_id.empty()) {
+      change_req->set_table_id(table_id);
+    }
   }
 
   void CDCSDKYsqlTest::PrepareSetCheckpointRequest(
@@ -1664,15 +1675,18 @@ namespace cdc {
   Result<GetChangesResponsePB> CDCSDKYsqlTest::GetChangesFromCDCWithExplictCheckpoint(
       const xrepl::StreamId& stream_id,
       const google::protobuf::RepeatedPtrField<master::TabletLocationsPB>& tablets,
-      const CDCSDKCheckpointPB* cp,
+      const CDCSDKCheckpointPB* from_op_id,
+      const CDCSDKCheckpointPB* explicit_checkpoint,
+      const TableId& colocated_table_id,
       int tablet_idx) {
     GetChangesRequestPB change_req;
     GetChangesResponsePB change_resp;
 
-    if (cp == nullptr) {
+    if (from_op_id == nullptr) {
       PrepareChangeRequest(&change_req, stream_id, tablets, tablet_idx);
     } else {
-      PrepareChangeRequestWithExplicitCheckpoint(&change_req, stream_id, tablets, *cp, tablet_idx);
+      PrepareChangeRequestWithExplicitCheckpoint(&change_req, stream_id, tablets,
+        from_op_id, explicit_checkpoint, colocated_table_id, tablet_idx);
     }
 
     // Retry only on LeaderNotReadyToServe or NotFound errors
@@ -3324,6 +3338,19 @@ namespace cdc {
         if (tablet_peer->tablet_id() == tablet_id) {
           ASSERT_OK(WaitFor(
               [&]() -> bool { return tablet_peer->get_cdc_sdk_safe_time() == expected_safe_time; },
+              MonoDelta::FromSeconds(60), "Safe_time is not as expected."));
+        }
+      }
+    }
+  }
+
+  void CDCSDKYsqlTest::AssertSafeTimeAsExpectedInTabletPeersForConsistentSnapshot(
+      const TabletId& tablet_id, const HybridTime expected_safe_time) {
+    for (size_t i = 0; i < test_cluster()->num_tablet_servers(); ++i) {
+      for (const auto& tablet_peer : test_cluster()->GetTabletPeers(i)) {
+        if (tablet_peer->tablet_id() == tablet_id) {
+          ASSERT_OK(WaitFor(
+              [&]() -> bool { return tablet_peer->get_cdc_sdk_safe_time() <= expected_safe_time; },
               MonoDelta::FromSeconds(60), "Safe_time is not as expected."));
         }
       }

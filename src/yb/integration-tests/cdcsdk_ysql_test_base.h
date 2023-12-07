@@ -350,7 +350,8 @@ class CDCSDKYsqlTest : public CDCSDKTestBase {
   void PrepareChangeRequestWithExplicitCheckpoint(
       GetChangesRequestPB* change_req, const xrepl::StreamId& stream_id,
       const google::protobuf::RepeatedPtrField<master::TabletLocationsPB>& tablets,
-      const CDCSDKCheckpointPB& cp, const int tablet_idx = 0);
+      const CDCSDKCheckpointPB* from_op_id, const CDCSDKCheckpointPB* explicit_checkpoint,
+      const TableId table_id = "", const int tablet_idx = 0);
 
   void PrepareSetCheckpointRequest(
       SetCDCCheckpointRequestPB* set_checkpoint_req,
@@ -470,7 +471,9 @@ class CDCSDKYsqlTest : public CDCSDKTestBase {
   Result<GetChangesResponsePB> GetChangesFromCDCWithExplictCheckpoint(
       const xrepl::StreamId& stream_id,
       const google::protobuf::RepeatedPtrField<master::TabletLocationsPB>& tablets,
-      const CDCSDKCheckpointPB* cp = nullptr,
+      const CDCSDKCheckpointPB* from_op_id = nullptr,
+      const CDCSDKCheckpointPB* explicit_checkpoint = nullptr,
+      const TableId& colocated_table_id = "",
       int tablet_idx = 0);
 
   bool DeleteCDCStream(const xrepl::StreamId& db_stream_id);
@@ -602,6 +605,9 @@ class CDCSDKYsqlTest : public CDCSDKTestBase {
   TableId GetColocatedTableId(const std::string& req_table_name);
 
   void AssertSafeTimeAsExpectedInTabletPeers(
+      const TabletId& tablet_id, const HybridTime expected_safe_time);
+
+  void AssertSafeTimeAsExpectedInTabletPeersForConsistentSnapshot(
       const TabletId& tablet_id, const HybridTime expected_safe_time);
 
   Status WaitForGetChangesToFetchRecords(
