@@ -2070,8 +2070,7 @@ TEST_F(CDCSDKYsqlTest, TestTabletSplitDuringConsistentSnapshot) {
       change_resp_updated = ASSERT_RESULT(UpdateCheckpoint(stream_id, tablets, cp_resp));
       first_read = false;
     } else {
-      change_resp_updated =
-        ASSERT_RESULT(UpdateCheckpoint(stream_id, tablets, &change_resp));
+      change_resp_updated = ASSERT_RESULT(UpdateCheckpoint(stream_id, tablets, &change_resp));
     }
 
     uint32_t record_size = change_resp_updated.cdc_sdk_proto_records_size();
@@ -2089,8 +2088,8 @@ TEST_F(CDCSDKYsqlTest, TestTabletSplitDuringConsistentSnapshot) {
     if (do_tablet_split) {
       // ASSERT_OK(test_cluster_.mini_cluster_->CompactTablets());
       ASSERT_OK(test_client()->FlushTables(
-      {table}, /* add_indexes = */ false, /* timeout_secs = */ 30,
-      /* is_compaction = */ false));
+          {table}, /* add_indexes = */ false, /* timeout_secs = */ 30,
+          /* is_compaction = */ false));
       WaitUntilSplitIsSuccesful(tablets.Get(0).tablet_id(), table);
       LOG(INFO) << "Tablet split succeded";
       do_tablet_split = false;

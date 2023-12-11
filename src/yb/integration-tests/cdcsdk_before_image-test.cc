@@ -1653,8 +1653,10 @@ TEST_F(CDCSDKYsqlTest, TestCompactionWithConsistentSnapshotAndNoBeforeImage) {
   ANNOTATE_UNPROTECTED_WRITE(FLAGS_TEST_yb_enable_cdc_consistent_snapshot_streams) = true;
   ANNOTATE_UNPROTECTED_WRITE(FLAGS_update_min_cdc_indices_interval_secs) = 1;
   ANNOTATE_UNPROTECTED_WRITE(FLAGS_cdc_state_checkpoint_update_interval_ms) = 0;
+  ANNOTATE_UNPROTECTED_WRITE(FLAGS_cdc_snapshot_batch_size) = 50;
   auto tablets = ASSERT_RESULT(SetUpCluster());
   auto table = ASSERT_RESULT(GetTable(&test_cluster_, kNamespaceName, kTableName));
+  auto peers = ListTabletPeers(test_cluster(), ListPeersFilter::kLeaders);
   // Temporary - this will create cdc_state table
   ASSERT_RESULT(CreateDBStream());
   ASSERT_OK(WriteRows(1 /* start */, 101 /* end */, &test_cluster_));
@@ -1674,8 +1676,8 @@ TEST_F(CDCSDKYsqlTest, TestCompactionWithConsistentSnapshotAndNoBeforeImage) {
   ASSERT_GE((*expected_row).cdc_sdk_latest_active_time, 0);
 
   // Assert that the safe time is invalid in the tablet_peers
-  AssertSafeTimeAsExpectedInTabletPeersForConsistentSnapshot(tablets[0].tablet_id(),
-    (*expected_row).cdc_sdk_safe_time);
+  AssertSafeTimeAsExpectedInTabletPeersForConsistentSnapshot(
+      tablets[0].tablet_id(), (*expected_row).cdc_sdk_safe_time);
 
   // Count the number of snapshot READs.
   uint32_t reads_snapshot = 0;
@@ -1695,17 +1697,20 @@ TEST_F(CDCSDKYsqlTest, TestCompactionWithConsistentSnapshotAndNoBeforeImage) {
       do_update = false;
     }
     if (first_read) {
-      change_resp_updated = ASSERT_RESULT(GetChangesFromCDCWithExplictCheckpoint(stream_id, tablets,
-        &cp_resp, &explicit_checkpoint));
+      change_resp_updated = ASSERT_RESULT(GetChangesFromCDCWithExplictCheckpoint(
+          stream_id, tablets, &cp_resp, &explicit_checkpoint));
       first_read = false;
+      // No changes in DocDB entries should be seen because retention barriers are held by snapshot.
+      auto count_before_compaction = CountEntriesInDocDB(peers, table.table_id());
+      ASSERT_OK(test_cluster_.mini_cluster_->CompactTablets());
+      auto count_after_compaction = CountEntriesInDocDB(peers, table.table_id());
+      ASSERT_EQ(count_before_compaction, count_after_compaction);
     } else {
-      change_resp_updated = ASSERT_RESULT(GetChangesFromCDCWithExplictCheckpoint(stream_id, tablets,
-        &change_resp.cdc_sdk_checkpoint(), &explicit_checkpoint));
+      change_resp_updated = ASSERT_RESULT(GetChangesFromCDCWithExplictCheckpoint(
+          stream_id, tablets, &change_resp.cdc_sdk_checkpoint(), &explicit_checkpoint));
+
     }
     uint32_t record_size = change_resp_updated.cdc_sdk_proto_records_size();
-    if (record_size == 0) {
-      break;
-    }
     uint32_t read_count = 0;
     for (uint32_t i = 0; i < record_size; ++i) {
       const CDCSDKProtoRecordPB record = change_resp_updated.cdc_sdk_proto_records(i);
@@ -1714,7 +1719,7 @@ TEST_F(CDCSDKYsqlTest, TestCompactionWithConsistentSnapshotAndNoBeforeImage) {
       if (record.row_message().op() == RowMessage::READ) {
         for (int jdx = 0; jdx < record.row_message().new_tuple_size(); jdx++) {
           s << " " << record.row_message().new_tuple(jdx).datum_int32();
-          if(record.row_message().new_tuple(jdx).column_name() == kKeyColumnName) {
+          if (record.row_message().new_tuple(jdx).column_name() == kKeyColumnName) {
             actual_result[0] = record.row_message().new_tuple(jdx).datum_int32();
           } else if (record.row_message().new_tuple(jdx).column_name() == kValueColumnName) {
             actual_result[1] = record.row_message().new_tuple(jdx).datum_int32();
@@ -1737,10 +1742,25 @@ TEST_F(CDCSDKYsqlTest, TestCompactionWithConsistentSnapshotAndNoBeforeImage) {
     reads_snapshot += read_count;
     change_resp = change_resp_updated;
     explicit_checkpoint = change_resp.cdc_sdk_checkpoint();
+
+    // received snapshot complete marker
+    if (change_resp.cdc_sdk_checkpoint().has_snapshot_time() &&
+        change_resp.cdc_sdk_checkpoint().snapshot_time() == 0 &&
+        change_resp.cdc_sdk_checkpoint().has_key() &&
+        change_resp.cdc_sdk_checkpoint().key() == "" &&
+        change_resp.cdc_sdk_checkpoint().has_write_id() &&
+        change_resp.cdc_sdk_checkpoint().write_id() == 0) {
+      ASSERT_RESULT(UpdateSnapshotDone(stream_id, tablets));
+      break;
+    }
   }
   ASSERT_EQ(reads_snapshot, 100);
-  auto peers = ListTabletPeers(test_cluster(), ListPeersFilter::kLeaders);
+  int count_before_compaction = CountEntriesInDocDB(peers, table.table_id());
+  // sleep for UpdatePeersAndMetrics thread to release retention barriers
+  sleep(2 * FLAGS_update_min_cdc_indices_interval_secs);
   auto result = test_cluster_.mini_cluster_->CompactTablets();
+  int count_after_compaction = CountEntriesInDocDB(peers, table.table_id());
+  ASSERT_LT(count_after_compaction, count_before_compaction);
 
   ASSERT_OK(WriteRows(101 /* start */, 102 /* end */, &test_cluster_));
   ASSERT_OK(UpdateRows(2 /* key */, 4 /* value */, &test_cluster_));
@@ -1752,8 +1772,7 @@ TEST_F(CDCSDKYsqlTest, TestCompactionWithConsistentSnapshotAndNoBeforeImage) {
             << change_resp.cdc_sdk_proto_records_size();
   ASSERT_OK(UpdateRows(2 /* key */, 6 /* value */, &test_cluster_));
   ASSERT_OK(UpdateRows(2 /* key */, 10 /* value */, &test_cluster_));
-  auto count_before_compaction = CountEntriesInDocDB(peers, table.table_id());
-  int count_after_compaction;
+  count_before_compaction = CountEntriesInDocDB(peers, table.table_id());
   ASSERT_OK(WaitFor(
       [&]() {
         auto result = test_cluster_.mini_cluster_->CompactTablets();
@@ -1766,8 +1785,7 @@ TEST_F(CDCSDKYsqlTest, TestCompactionWithConsistentSnapshotAndNoBeforeImage) {
         }
         return false;
       },
-      MonoDelta::FromSeconds(60),
-      "Compaction is restricted for the stream."));
+      MonoDelta::FromSeconds(60), "Expected compaction did not happen"));
   LOG(INFO) << "count_before_compaction: " << count_before_compaction
             << " count_after_compaction: " << count_after_compaction;
   ASSERT_LT(count_after_compaction, count_before_compaction);
@@ -1789,8 +1807,10 @@ TEST_F(CDCSDKYsqlTest, TestCompactionWithConsistentSnapshotAndBeforeImage) {
   ANNOTATE_UNPROTECTED_WRITE(FLAGS_TEST_yb_enable_cdc_consistent_snapshot_streams) = true;
   ANNOTATE_UNPROTECTED_WRITE(FLAGS_update_min_cdc_indices_interval_secs) = 1;
   ANNOTATE_UNPROTECTED_WRITE(FLAGS_cdc_state_checkpoint_update_interval_ms) = 0;
+  ANNOTATE_UNPROTECTED_WRITE(FLAGS_cdc_snapshot_batch_size) = 50;
   auto tablets = ASSERT_RESULT(SetUpCluster());
   auto table = ASSERT_RESULT(GetTable(&test_cluster_, kNamespaceName, kTableName));
+  auto peers = ListTabletPeers(test_cluster(), ListPeersFilter::kLeaders);
   // Temporary - this will create cdc_state table
   ASSERT_RESULT(CreateDBStream());
 
@@ -1812,8 +1832,8 @@ TEST_F(CDCSDKYsqlTest, TestCompactionWithConsistentSnapshotAndBeforeImage) {
   ASSERT_GE((*expected_row).cdc_sdk_latest_active_time, 0);
 
   // Assert that the safe time is invalid in the tablet_peers
-  AssertSafeTimeAsExpectedInTabletPeersForConsistentSnapshot(tablets[0].tablet_id(),
-    (*expected_row).cdc_sdk_safe_time);
+  AssertSafeTimeAsExpectedInTabletPeersForConsistentSnapshot(
+      tablets[0].tablet_id(), (*expected_row).cdc_sdk_safe_time);
 
   // Count the number of snapshot READs.
   uint32_t reads_snapshot = 0;
@@ -1834,13 +1854,15 @@ TEST_F(CDCSDKYsqlTest, TestCompactionWithConsistentSnapshotAndBeforeImage) {
     if (first_read) {
       change_resp_updated = ASSERT_RESULT(UpdateCheckpoint(stream_id, tablets, cp_resp));
       first_read = false;
+      // No changes in DocDB entries should be seen because retention barriers are held by snapshot.
+      auto count_before_compaction = CountEntriesInDocDB(peers, table.table_id());
+      ASSERT_OK(test_cluster_.mini_cluster_->CompactTablets());
+      auto count_after_compaction = CountEntriesInDocDB(peers, table.table_id());
+      ASSERT_EQ(count_before_compaction, count_after_compaction);
     } else {
       change_resp_updated = ASSERT_RESULT(UpdateCheckpoint(stream_id, tablets, &change_resp));
     }
     uint32_t record_size = change_resp_updated.cdc_sdk_proto_records_size();
-    if (record_size == 0) {
-      break;
-    }
     uint32_t read_count = 0;
     for (uint32_t i = 0; i < record_size; ++i) {
       const CDCSDKProtoRecordPB record = change_resp_updated.cdc_sdk_proto_records(i);
@@ -1849,7 +1871,7 @@ TEST_F(CDCSDKYsqlTest, TestCompactionWithConsistentSnapshotAndBeforeImage) {
       if (record.row_message().op() == RowMessage::READ) {
         for (int jdx = 0; jdx < record.row_message().new_tuple_size(); jdx++) {
           s << " " << record.row_message().new_tuple(jdx).datum_int32();
-          if(record.row_message().new_tuple(jdx).column_name() == kKeyColumnName) {
+          if (record.row_message().new_tuple(jdx).column_name() == kKeyColumnName) {
             actual_result[0] = record.row_message().new_tuple(jdx).datum_int32();
           } else if (record.row_message().new_tuple(jdx).column_name() == kValueColumnName) {
             actual_result[1] = record.row_message().new_tuple(jdx).datum_int32();
@@ -1871,10 +1893,24 @@ TEST_F(CDCSDKYsqlTest, TestCompactionWithConsistentSnapshotAndBeforeImage) {
     }
     reads_snapshot += read_count;
     change_resp = change_resp_updated;
+    // received snapshot complete marker
+    if (change_resp.cdc_sdk_checkpoint().has_snapshot_time() &&
+        change_resp.cdc_sdk_checkpoint().snapshot_time() == 0 &&
+        change_resp.cdc_sdk_checkpoint().has_key() &&
+        change_resp.cdc_sdk_checkpoint().key() == "" &&
+        change_resp.cdc_sdk_checkpoint().has_write_id() &&
+        change_resp.cdc_sdk_checkpoint().write_id() == 0) {
+      ASSERT_RESULT(UpdateSnapshotDone(stream_id, tablets));
+      break;
+    }
   }
   ASSERT_EQ(reads_snapshot, 100);
-  auto peers = ListTabletPeers(test_cluster(), ListPeersFilter::kLeaders);
+  int count_before_compaction = CountEntriesInDocDB(peers, table.table_id());
+  // sleep for UpdatePeersAndMetrics thread to release retention barriers
+  sleep(2 * FLAGS_update_min_cdc_indices_interval_secs);
   auto result = test_cluster_.mini_cluster_->CompactTablets();
+  int count_after_compaction = CountEntriesInDocDB(peers, table.table_id());
+  ASSERT_EQ(count_after_compaction, count_before_compaction);
 
   ASSERT_OK(WriteRows(101 /* start */, 102 /* end */, &test_cluster_));
   ASSERT_OK(UpdateRows(2 /* key */, 4 /* value */, &test_cluster_));
@@ -1886,8 +1922,7 @@ TEST_F(CDCSDKYsqlTest, TestCompactionWithConsistentSnapshotAndBeforeImage) {
             << change_resp.cdc_sdk_proto_records_size();
   ASSERT_OK(UpdateRows(2 /* key */, 6 /* value */, &test_cluster_));
   ASSERT_OK(UpdateRows(2 /* key */, 10 /* value */, &test_cluster_));
-  auto count_before_compaction = CountEntriesInDocDB(peers, table.table_id());
-  int count_after_compaction;
+  count_before_compaction = CountEntriesInDocDB(peers, table.table_id());
   ASSERT_OK(WaitFor(
       [&]() {
         auto result = test_cluster_.mini_cluster_->CompactTablets();
@@ -1900,8 +1935,7 @@ TEST_F(CDCSDKYsqlTest, TestCompactionWithConsistentSnapshotAndBeforeImage) {
         }
         return false;
       },
-      MonoDelta::FromSeconds(60),
-      "Compaction is restricted for the stream."));
+      MonoDelta::FromSeconds(60), "Expected compaction did not happen"));
   LOG(INFO) << "count_before_compaction: " << count_before_compaction
             << " count_after_compaction: " << count_after_compaction;
   ASSERT_LE(count_after_compaction, count_before_compaction);
@@ -1944,7 +1978,6 @@ TEST_F(CDCSDKYsqlTest, TestHistoryRetentionWithNoExportConsistentSnapshotAndBefo
   // Assert that the safe time in the tablet_peers is same as cdc_state
   AssertSafeTimeAsExpectedInTabletPeers(tablets[0].tablet_id(), (*expected_row).cdc_sdk_safe_time);
 }
-
 
 YB_STRONGLY_TYPED_BOOL(SetColumnDefaultValue);
 class CDCYsqlAddColumnBeforeImageTest

@@ -1031,10 +1031,9 @@ TEST_F(CDCSDKYsqlTest, TestConsistentSnapshotWithCDCSDKConsistentStream) {
   int num_batches = 5;
   int inserts_per_batch = 100;
 
-  std::thread t1(
-      [&]() -> void {
-        PerformSingleAndMultiShardInserts(num_batches, inserts_per_batch, 20, 201);
-      });
+  std::thread t1([&]() -> void {
+    PerformSingleAndMultiShardInserts(num_batches, inserts_per_batch, 20, 201);
+  });
   std::thread t2([&]() -> void {
     PerformSingleAndMultiShardInserts(
         num_batches, inserts_per_batch, 50, 201 + num_batches * inserts_per_batch);
@@ -1055,8 +1054,7 @@ TEST_F(CDCSDKYsqlTest, TestConsistentSnapshotWithCDCSDKConsistentStream) {
       change_resp_updated = ASSERT_RESULT(UpdateCheckpoint(stream_id, tablets, cp_resp));
       first_read = false;
     } else {
-      change_resp_updated =
-        ASSERT_RESULT(UpdateCheckpoint(stream_id, tablets, &change_resp));
+      change_resp_updated = ASSERT_RESULT(UpdateCheckpoint(stream_id, tablets, &change_resp));
     }
 
     uint32_t record_size = change_resp_updated.cdc_sdk_proto_records_size();
@@ -1074,7 +1072,7 @@ TEST_F(CDCSDKYsqlTest, TestConsistentSnapshotWithCDCSDKConsistentStream) {
     // End of the snapshot records.
     if (change_resp_updated.cdc_sdk_checkpoint().write_id() == 0 &&
         change_resp_updated.cdc_sdk_checkpoint().snapshot_time() == 0) {
-          change_resp_updated = ASSERT_RESULT(UpdateSnapshotDone(stream_id, tablets));
+      change_resp_updated = ASSERT_RESULT(UpdateSnapshotDone(stream_id, tablets));
       break;
     }
   }
@@ -1095,7 +1093,7 @@ TEST_F(CDCSDKYsqlTest, TestConsistentSnapshotWithCDCSDKConsistentStream) {
   int count[] = {0, 0, 0, 0, 0, 0, 0, 0};
 
   auto get_changes_resp =
-    GetAllPendingChangesFromCdc(stream_id, tablets, &change_resp_updated.cdc_sdk_checkpoint());
+      GetAllPendingChangesFromCdc(stream_id, tablets, &change_resp_updated.cdc_sdk_checkpoint());
   for (auto record : get_changes_resp.records) {
     UpdateRecordCount(record, count);
   }
@@ -1107,7 +1105,6 @@ TEST_F(CDCSDKYsqlTest, TestConsistentSnapshotWithCDCSDKConsistentStream) {
   }
   ASSERT_EQ(2020, get_changes_resp.records.size());
 }
-
 
 }  // namespace cdc
 }  // namespace yb
