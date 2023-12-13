@@ -1768,8 +1768,6 @@ TEST_F(CDCSDKYsqlTest, TestCompactionWithConsistentSnapshotAndNoBeforeImage) {
 
   change_resp =
       ASSERT_RESULT(GetChangesFromCDC(stream_id, tablets, &change_resp.cdc_sdk_checkpoint()));
-  LOG(INFO) << "Sleeping to expire files according to TTL (history retention prevents deletion): "
-            << change_resp.cdc_sdk_proto_records_size();
   ASSERT_OK(UpdateRows(2 /* key */, 6 /* value */, &test_cluster_));
   ASSERT_OK(UpdateRows(2 /* key */, 10 /* value */, &test_cluster_));
   count_before_compaction = CountEntriesInDocDB(peers, table.table_id());
@@ -1918,8 +1916,9 @@ TEST_F(CDCSDKYsqlTest, TestCompactionWithConsistentSnapshotAndBeforeImage) {
 
   change_resp =
       ASSERT_RESULT(GetChangesFromCDC(stream_id, tablets, &change_resp.cdc_sdk_checkpoint()));
-  LOG(INFO) << "Sleeping to expire files according to TTL (history retention prevents deletion): "
-            << change_resp.cdc_sdk_proto_records_size();
+  change_resp =
+      ASSERT_RESULT(UpdateCheckpoint(stream_id, tablets, &change_resp));
+  sleep(2 * FLAGS_update_min_cdc_indices_interval_secs);
   ASSERT_OK(UpdateRows(2 /* key */, 6 /* value */, &test_cluster_));
   ASSERT_OK(UpdateRows(2 /* key */, 10 /* value */, &test_cluster_));
   count_before_compaction = CountEntriesInDocDB(peers, table.table_id());
