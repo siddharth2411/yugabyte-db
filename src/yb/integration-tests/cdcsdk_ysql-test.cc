@@ -6661,14 +6661,16 @@ TEST_F(CDCSDKYsqlTest, TestGetCheckpointForColocatedTableWithConsistentSnapshot)
   auto req_table_id = GetColocatedTableId("test1");
   ASSERT_NE(req_table_id, "");
   // Assert that we get all records from the second table: "test1".
-  auto cp_resp = ASSERT_RESULT(GetCDCSDKSnapshotCheckpoint(stream_id, tablets[0].tablet_id(), req_table_id));
+  auto cp_resp =
+      ASSERT_RESULT(GetCDCSDKSnapshotCheckpoint(stream_id, tablets[0].tablet_id(), req_table_id));
   verify_snapshot_checkpoint(cp_resp, req_table_id);
   LOG(INFO) << "Verified snapshot records for table: test1";
 
   // Assert that we get all records from the second table: "test2".
   req_table_id = GetColocatedTableId("test2");
   ASSERT_NE(req_table_id, "");
-  auto cp_resp = ASSERT_RESULT(GetCDCSDKSnapshotCheckpoint(stream_id, tablets[0].tablet_id(), req_table_id));
+  auto cp_resp =
+      ASSERT_RESULT(GetCDCSDKSnapshotCheckpoint(stream_id, tablets[0].tablet_id(), req_table_id));
   verify_snapshot_checkpoint(cp_resp, req_table_id);
   LOG(INFO) << "Verified snapshot records for table: test2";
 }
