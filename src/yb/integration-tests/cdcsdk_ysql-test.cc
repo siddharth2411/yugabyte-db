@@ -6588,7 +6588,7 @@ TEST_F(CDCSDKYsqlTest, TestGetCheckpointForColocatedTableWithConsistentSnapshot)
   ANNOTATE_UNPROTECTED_WRITE(FLAGS_update_min_cdc_indices_interval_secs) = 1;
   ANNOTATE_UNPROTECTED_WRITE(FLAGS_cdc_state_checkpoint_update_interval_ms) = 0;
   ASSERT_OK(SetUpWithParams(3, 1, true /* colocated */));
-  google::SetVLOGLevel("cdc*", 0);
+  // google::SetVLOGLevel("cdc*", 0);
 
   auto conn = ASSERT_RESULT(test_cluster_.ConnectToDB(kNamespaceName));
   ASSERT_OK(
@@ -6661,13 +6661,14 @@ TEST_F(CDCSDKYsqlTest, TestGetCheckpointForColocatedTableWithConsistentSnapshot)
   auto req_table_id = GetColocatedTableId("test1");
   ASSERT_NE(req_table_id, "");
   // Assert that we get all records from the second table: "test1".
-  auto cp_resp = ASSERT_RESULT(GetCDCSDKSnapshotCheckpoint(stream_id, tablets[0].tablet_id()));
+  auto cp_resp = ASSERT_RESULT(GetCDCSDKSnapshotCheckpoint(stream_id, tablets[0].tablet_id(), req_table_id));
   verify_snapshot_checkpoint(cp_resp, req_table_id);
   LOG(INFO) << "Verified snapshot records for table: test1";
 
   // Assert that we get all records from the second table: "test2".
   req_table_id = GetColocatedTableId("test2");
   ASSERT_NE(req_table_id, "");
+  auto cp_resp = ASSERT_RESULT(GetCDCSDKSnapshotCheckpoint(stream_id, tablets[0].tablet_id(), req_table_id));
   verify_snapshot_checkpoint(cp_resp, req_table_id);
   LOG(INFO) << "Verified snapshot records for table: test2";
 }
