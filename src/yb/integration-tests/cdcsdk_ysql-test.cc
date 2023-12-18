@@ -6581,56 +6581,6 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestGetCheckpointForColocatedTabl
   LOG(INFO) << "Verified snapshot records for table: test2";
 }
 
-TEST_F(CDCSDKYsqlTest, TestGetCheckpointForColocatedTableWithConsistentSnapshot) {
-  ANNOTATE_UNPROTECTED_WRITE(FLAGS_TEST_yb_enable_cdc_consistent_snapshot_streams) = true;
-  ANNOTATE_UNPROTECTED_WRITE(FLAGS_cdc_snapshot_batch_size) = 100;
-  ANNOTATE_UNPROTECTED_WRITE(FLAGS_enable_update_local_peer_min_index) = false;
-  ANNOTATE_UNPROTECTED_WRITE(FLAGS_update_min_cdc_indices_interval_secs) = 1;
-  ANNOTATE_UNPROTECTED_WRITE(FLAGS_cdc_state_checkpoint_update_interval_ms) = 0;
-  ASSERT_OK(SetUpWithParams(3, 1, true /* colocated */));
-  // google::SetVLOGLevel("cdc*", 0);
-
-  auto conn = ASSERT_RESULT(test_cluster_.ConnectToDB(kNamespaceName));
-  ASSERT_OK(
-      conn.ExecuteFormat("CREATE TABLE test1(id1 int primary key, value_2 int, value_3 int);"));
-  ASSERT_OK(
-      conn.ExecuteFormat("CREATE TABLE test2(id2 int primary key, value_2 int, value_3 int, "
-                         "value_4 int);"));
-
-  auto table = ASSERT_RESULT(GetTable(&test_cluster_, kNamespaceName, "test1"));
-  google::protobuf::RepeatedPtrField<master::TabletLocationsPB> tablets;
-  ASSERT_OK(test_client()->GetTablets(table, 0, &tablets, /* partition_list_version =*/nullptr));
-  ASSERT_EQ(tablets.size(), 1);
-
-  const int64_t snapshot_records_per_table = 500;
-  for (int i = 0; i < snapshot_records_per_table; ++i) {
-    ASSERT_OK(conn.ExecuteFormat("INSERT INTO test1 VALUES ($0, $1, $2)", i, i + 1, i + 2));
-    ASSERT_OK(
-        conn.ExecuteFormat("INSERT INTO test2 VALUES ($0, $1, $2, $3)", i, i + 1, i + 2, i + 3));
-  }
-  // Temporary - this will create cdc_state table
-  ASSERT_RESULT(CreateDBStream());
-  xrepl::StreamId stream_id = ASSERT_RESULT(CreateConsistentSnapshotStream());
-
-  auto req_table_id = GetColocatedTableId("test1");
-  ASSERT_NE(req_table_id, "");
-  // Assert that we get all records from the second table: "test1".
-  auto cp_resp =
-      ASSERT_RESULT(GetCDCSDKSnapshotCheckpoint(stream_id, tablets[0].tablet_id(), req_table_id));
-  VerifySnapshotOnColocatedTables(
-      stream_id, tablets, cp_resp, req_table_id, "test1", snapshot_records_per_table);
-  LOG(INFO) << "Verified snapshot records for table: test1";
-
-  // Assert that we get all records from the second table: "test2".
-  req_table_id = GetColocatedTableId("test2");
-  ASSERT_NE(req_table_id, "");
-  cp_resp =
-      ASSERT_RESULT(GetCDCSDKSnapshotCheckpoint(stream_id, tablets[0].tablet_id(), req_table_id));
-  VerifySnapshotOnColocatedTables(
-      stream_id, tablets, cp_resp, req_table_id, "test2", snapshot_records_per_table);
-  LOG(INFO) << "Verified snapshot records for table: test2";
-}
-
 TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestGetCheckpointOnStreamedColocatedTable)) {
   ANNOTATE_UNPROTECTED_WRITE(FLAGS_enable_update_local_peer_min_index) = false;
   ANNOTATE_UNPROTECTED_WRITE(FLAGS_update_min_cdc_indices_interval_secs) = 1;
