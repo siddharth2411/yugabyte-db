@@ -1019,8 +1019,6 @@ TEST_F(CDCSDKYsqlTest, TestConsistentSnapshotWithCDCSDKConsistentStream) {
   ANNOTATE_UNPROTECTED_WRITE(FLAGS_cdc_max_stream_intent_records) = 40;
   auto tablets = ASSERT_RESULT(SetUpCluster());
   auto table = ASSERT_RESULT(GetTable(&test_cluster_, kNamespaceName, kTableName));
-  // Temporary - this will create cdc_state table
-  ASSERT_RESULT(CreateDBStream());
   ASSERT_OK(WriteRows(1 /* start */, 201 /* end */, &test_cluster_));
 
   xrepl::StreamId stream_id = ASSERT_RESULT(CreateConsistentSnapshotStream());

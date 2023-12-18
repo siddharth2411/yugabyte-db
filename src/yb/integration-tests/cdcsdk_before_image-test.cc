@@ -1743,8 +1743,6 @@ TEST_F(CDCSDKBeforeImageTest, TestCompactionWithConsistentSnapshotAndNoBeforeIma
   auto tablets = ASSERT_RESULT(SetUpCluster());
   auto table = ASSERT_RESULT(GetTable(&test_cluster_, kNamespaceName, kTableName));
   auto peers = ListTabletPeers(test_cluster(), ListPeersFilter::kLeaders);
-  // Temporary - this will create cdc_state table
-  ASSERT_RESULT(CreateDBStream());
   ASSERT_OK(WriteRows(1 /* start */, 101 /* end */, &test_cluster_));
   xrepl::StreamId stream_id = ASSERT_RESULT(CreateConsistentSnapshotStream());
 
@@ -1808,8 +1806,6 @@ TEST_F(CDCSDKBeforeImageTest, TestCompactionWithConsistentSnapshotAndBeforeImage
   auto tablets = ASSERT_RESULT(SetUpCluster());
   auto table = ASSERT_RESULT(GetTable(&test_cluster_, kNamespaceName, kTableName));
   auto peers = ListTabletPeers(test_cluster(), ListPeersFilter::kLeaders);
-  // Temporary - this will create cdc_state table
-  ASSERT_RESULT(CreateDBStream());
 
   ASSERT_OK(WriteRows(1 /* start */, 101 /* end */, &test_cluster_));
   xrepl::StreamId stream_id = ASSERT_RESULT(CreateConsistentSnapshotStream(
@@ -1848,7 +1844,7 @@ TEST_F(CDCSDKBeforeImageTest, TestCompactionWithConsistentSnapshotAndBeforeImage
 
   change_resp =
       ASSERT_RESULT(GetChangesFromCDCWithExplictCheckpoint(stream_id, tablets, &change_resp.cdc_sdk_checkpoint(), &change_resp.cdc_sdk_checkpoint()));
-  // for updating cdc_state with explicit checkpoint    
+  // for updating cdc_state with explicit checkpoint
   change_resp =
       ASSERT_RESULT(GetChangesFromCDCWithExplictCheckpoint(stream_id, tablets, &change_resp.cdc_sdk_checkpoint(), &change_resp.cdc_sdk_checkpoint()));
 
@@ -1871,8 +1867,6 @@ TEST_F(CDCSDKBeforeImageTest, TestHistoryRetentionWithNoExportConsistentSnapshot
   ANNOTATE_UNPROTECTED_WRITE(FLAGS_update_min_cdc_indices_interval_secs) = 1;
   ANNOTATE_UNPROTECTED_WRITE(FLAGS_cdc_state_checkpoint_update_interval_ms) = 0;
   auto tablets = ASSERT_RESULT(SetUpCluster());
-  // Temporary - this will create cdc_state table
-  ASSERT_RESULT(CreateDBStream());
 
   ASSERT_OK(WriteRows(1 /* start */, 101 /* end */, &test_cluster_));
   xrepl::StreamId stream_id = ASSERT_RESULT(CreateConsistentSnapshotStream(
