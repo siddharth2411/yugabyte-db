@@ -16,12 +16,13 @@ namespace yb {
 namespace cdc {
 
 class CDCSDKBeforeImageTest : public CDCSDKYsqlTest {
-  public:
-  void SetUp() override {
-    CDCSDKYsqlTest::SetUp();
-  }
+ public:
+  void SetUp() override { CDCSDKYsqlTest::SetUp(); }
 
-  void ConsumeSnapshotAndPerformDML(xrepl::StreamId stream_id, YBTableName table, google::protobuf::RepeatedPtrField<master::TabletLocationsPB> tablets, CDCSDKCheckpointPB checkpoint, GetChangesResponsePB* change_resp) {
+  void ConsumeSnapshotAndPerformDML(
+      xrepl::StreamId stream_id, YBTableName table,
+      google::protobuf::RepeatedPtrField<master::TabletLocationsPB> tablets,
+      CDCSDKCheckpointPB checkpoint, GetChangesResponsePB* change_resp) {
     auto peers = ListTabletPeers(test_cluster(), ListPeersFilter::kLeaders);
     uint32_t reads_snapshot = 0;
     bool do_update = true;
@@ -43,7 +44,8 @@ class CDCSDKBeforeImageTest : public CDCSDKYsqlTest {
         change_resp_updated = ASSERT_RESULT(GetChangesFromCDCWithExplictCheckpoint(
             stream_id, tablets, &checkpoint, &explicit_checkpoint));
         first_read = false;
-        // No changes in DocDB entries should be seen because retention barriers are held by snapshot.
+        // No changes in DocDB entries should be seen because retention barriers are held by
+        // snapshot.
         auto count_before_compaction = CountEntriesInDocDB(peers, table.table_id());
         ASSERT_OK(test_cluster_.mini_cluster_->CompactTablets());
         auto count_after_compaction = CountEntriesInDocDB(peers, table.table_id());
@@ -51,7 +53,6 @@ class CDCSDKBeforeImageTest : public CDCSDKYsqlTest {
       } else {
         change_resp_updated = ASSERT_RESULT(GetChangesFromCDCWithExplictCheckpoint(
             stream_id, tablets, &change_resp->cdc_sdk_checkpoint(), &explicit_checkpoint));
-
       }
       uint32_t record_size = change_resp_updated.cdc_sdk_proto_records_size();
       uint32_t read_count = 0;
@@ -1335,7 +1336,8 @@ TEST_F(CDCSDKBeforeImageTest, YB_DISABLE_TEST_IN_TSAN(TestColumnDropBeforeImage)
       FLAGS_ysql_enable_packed_row ? packed_row_expected_count : expected_count, count);
 }
 
-TEST_F(CDCSDKBeforeImageTest, YB_DISABLE_TEST_IN_TSAN(TestLargeTransactionUpdateRowsWithBeforeImage)) {
+TEST_F(
+    CDCSDKBeforeImageTest, YB_DISABLE_TEST_IN_TSAN(TestLargeTransactionUpdateRowsWithBeforeImage)) {
   google::SetVLOGLevel("cdc_service", 1);
   google::SetVLOGLevel("cdcsdk_producer", 1);
   ANNOTATE_UNPROTECTED_WRITE(FLAGS_update_min_cdc_indices_interval_secs) = 1;
@@ -1428,7 +1430,8 @@ TEST_F(CDCSDKBeforeImageTest, YB_DISABLE_TEST_IN_TSAN(TestLargeTransactionUpdate
   ASSERT_EQ(insert_count, 2 * update_count);
 }
 
-TEST_F(CDCSDKBeforeImageTest, YB_DISABLE_TEST_IN_TSAN(TestLargeTransactionDeleteRowsWithBeforeImage)) {
+TEST_F(
+    CDCSDKBeforeImageTest, YB_DISABLE_TEST_IN_TSAN(TestLargeTransactionDeleteRowsWithBeforeImage)) {
   google::SetVLOGLevel("cdc_service", 1);
   google::SetVLOGLevel("cdcsdk_producer", 1);
   // ANNOTATE_UNPROTECTED_WRITE(FLAGS_timestamp_history_retention_interval_sec) = 0;
@@ -1625,7 +1628,9 @@ TEST_F(CDCSDKBeforeImageTest, YB_DISABLE_TEST_IN_TSAN(TestMultipleTableAlterWith
 
 // Insert one row, update the inserted row twice and verify before image.
 // Expected records: (DDL, INSERT, UPDATE).
-TEST_F(CDCSDKBeforeImageTest, YB_DISABLE_TEST_IN_TSAN(TestSingleShardUpdateBeforeImageOnColocatedTable)) {
+TEST_F(
+    CDCSDKBeforeImageTest,
+    YB_DISABLE_TEST_IN_TSAN(TestSingleShardUpdateBeforeImageOnColocatedTable)) {
   ANNOTATE_UNPROTECTED_WRITE(FLAGS_timestamp_history_retention_interval_sec) = 0;
   ASSERT_OK(SetUpWithParams(1, 1, true /* colocated */));
 
@@ -1675,7 +1680,9 @@ TEST_F(CDCSDKBeforeImageTest, YB_DISABLE_TEST_IN_TSAN(TestSingleShardUpdateBefor
   }
 }
 
-TEST_F(CDCSDKBeforeImageTest, YB_DISABLE_TEST_IN_TSAN(TestMultiShardUpdateBeforeImageOnColocatedTable)) {
+TEST_F(
+    CDCSDKBeforeImageTest,
+    YB_DISABLE_TEST_IN_TSAN(TestMultiShardUpdateBeforeImageOnColocatedTable)) {
   ANNOTATE_UNPROTECTED_WRITE(FLAGS_timestamp_history_retention_interval_sec) = 0;
   ASSERT_OK(SetUpWithParams(3, 1, true));
 
@@ -1777,11 +1784,11 @@ TEST_F(CDCSDKBeforeImageTest, TestCompactionWithConsistentSnapshotAndNoBeforeIma
   ASSERT_OK(UpdateRows(2 /* key */, 4 /* value */, &test_cluster_));
   ASSERT_OK(UpdateRows(2 /* key */, 5 /* value */, &test_cluster_));
 
-  change_resp =
-      ASSERT_RESULT(GetChangesFromCDCWithExplictCheckpoint(stream_id, tablets, &change_resp.cdc_sdk_checkpoint(), &change_resp.cdc_sdk_checkpoint()));
+  change_resp = ASSERT_RESULT(GetChangesFromCDCWithExplictCheckpoint(
+      stream_id, tablets, &change_resp.cdc_sdk_checkpoint(), &change_resp.cdc_sdk_checkpoint()));
   // for updating cdc_state with explicit checkpoint
-  change_resp =
-      ASSERT_RESULT(GetChangesFromCDCWithExplictCheckpoint(stream_id, tablets, &change_resp.cdc_sdk_checkpoint(), &change_resp.cdc_sdk_checkpoint()));
+  change_resp = ASSERT_RESULT(GetChangesFromCDCWithExplictCheckpoint(
+      stream_id, tablets, &change_resp.cdc_sdk_checkpoint(), &change_resp.cdc_sdk_checkpoint()));
 
   WaitForCompaction(table);
 
@@ -1842,11 +1849,11 @@ TEST_F(CDCSDKBeforeImageTest, TestCompactionWithConsistentSnapshotAndBeforeImage
   ASSERT_OK(UpdateRows(2 /* key */, 4 /* value */, &test_cluster_));
   ASSERT_OK(UpdateRows(2 /* key */, 5 /* value */, &test_cluster_));
 
-  change_resp =
-      ASSERT_RESULT(GetChangesFromCDCWithExplictCheckpoint(stream_id, tablets, &change_resp.cdc_sdk_checkpoint(), &change_resp.cdc_sdk_checkpoint()));
+  change_resp = ASSERT_RESULT(GetChangesFromCDCWithExplictCheckpoint(
+      stream_id, tablets, &change_resp.cdc_sdk_checkpoint(), &change_resp.cdc_sdk_checkpoint()));
   // for updating cdc_state with explicit checkpoint
-  change_resp =
-      ASSERT_RESULT(GetChangesFromCDCWithExplictCheckpoint(stream_id, tablets, &change_resp.cdc_sdk_checkpoint(), &change_resp.cdc_sdk_checkpoint()));
+  change_resp = ASSERT_RESULT(GetChangesFromCDCWithExplictCheckpoint(
+      stream_id, tablets, &change_resp.cdc_sdk_checkpoint(), &change_resp.cdc_sdk_checkpoint()));
 
   WaitForCompaction(table);
   expected_row = ReadFromCdcStateTable(stream_id, tablets[0].tablet_id());
