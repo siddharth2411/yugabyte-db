@@ -3098,6 +3098,26 @@ namespace cdc {
     ValidateColumnCounts(change_resp, 2);
   }
 
+  void CDCSDKYsqlTest::WaitForCompaction(YBTableName table) {
+    auto peers = ListTabletPeers(test_cluster(), ListPeersFilter::kLeaders);
+    int count_before_compaction = CountEntriesInDocDB(peers, table.table_id());
+    int count_after_compaction = 0;
+    ASSERT_OK(WaitFor(
+      [&]() {
+        auto result = test_cluster_.mini_cluster_->CompactTablets();
+        if (!result.ok()) {
+          return false;
+        }
+        count_after_compaction = CountEntriesInDocDB(peers, table.table_id());
+        if (count_after_compaction < count_before_compaction) {
+          return true;
+        }
+        return false;
+      },
+      MonoDelta::FromSeconds(60), "Expected compaction did not happen"));
+    LOG(INFO) << "count_before_compaction: " << count_before_compaction
+            << " count_after_compaction: " << count_after_compaction;
+  }
 
   Result<std::string> CDCSDKYsqlTest::GetValueFromMap(const QLMapValuePB& map_value,
     const std::string& key) {

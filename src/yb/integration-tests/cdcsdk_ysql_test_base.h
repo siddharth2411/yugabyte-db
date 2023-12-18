@@ -573,6 +573,8 @@ class CDCSDKYsqlTest : public CDCSDKTestBase {
   void CDCSDKAlterWithSysCatalogCompaction(bool packed_row);
   void CDCSDKIntentsBatchReadWithAlterAndTabletLeaderSwitch(bool packed_row);
 
+  void WaitForCompaction(YBTableName table);
+
   Result<std::string> GetValueFromMap(const QLMapValuePB& map_value, const std::string& key);
 
   template <class T>
