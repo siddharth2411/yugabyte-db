@@ -6602,8 +6602,8 @@ TEST_F(CDCSDKYsqlTest, TestGetCheckpointForColocatedTableWithConsistentSnapshot)
   ASSERT_OK(test_client()->GetTablets(table, 0, &tablets, /* partition_list_version =*/nullptr));
   ASSERT_EQ(tablets.size(), 1);
 
-  const int64_t snapshot_recrods_per_table = 500;
-  for (int i = 0; i < snapshot_recrods_per_table; ++i) {
+  const int64_t snapshot_records_per_table = 500;
+  for (int i = 0; i < snapshot_records_per_table; ++i) {
     ASSERT_OK(conn.ExecuteFormat("INSERT INTO test1 VALUES ($0, $1, $2)", i, i + 1, i + 2));
     ASSERT_OK(
         conn.ExecuteFormat("INSERT INTO test2 VALUES ($0, $1, $2, $3)", i, i + 1, i + 2, i + 3));
@@ -6612,58 +6612,13 @@ TEST_F(CDCSDKYsqlTest, TestGetCheckpointForColocatedTableWithConsistentSnapshot)
   ASSERT_RESULT(CreateDBStream());
   xrepl::StreamId stream_id = ASSERT_RESULT(CreateConsistentSnapshotStream());
 
-  auto verify_snapshot_checkpoint = [&](const CDCSDKCheckpointPB& snapshot_bootstrap_checkpoint,
-                                        const TableId& req_table_id) {
-    bool first_call = true;
-    GetChangesResponsePB change_resp;
-    GetChangesResponsePB next_change_resp;
-    uint64 expected_snapshot_time;
-    CDCSDKCheckpointPB explicit_checkpoint;
-
-    while (true) {
-      if (first_call) {
-        next_change_resp = ASSERT_RESULT(GetChangesFromCDCWithExplictCheckpoint(
-            stream_id, tablets, &snapshot_bootstrap_checkpoint, &explicit_checkpoint,
-            req_table_id));
-      } else {
-        next_change_resp = ASSERT_RESULT(GetChangesFromCDCWithExplictCheckpoint(
-            stream_id, tablets, &change_resp.cdc_sdk_checkpoint(), &explicit_checkpoint,
-            req_table_id));
-      }
-
-      auto resp =
-          ASSERT_RESULT(GetCDCSnapshotCheckpoint(stream_id, tablets[0].tablet_id(), req_table_id));
-      ASSERT_GE(resp.snapshot_time(), 0);
-      if (first_call) {
-        ASSERT_EQ(resp.checkpoint().op_id().term(), snapshot_bootstrap_checkpoint.term());
-        ASSERT_EQ(resp.checkpoint().op_id().index(), snapshot_bootstrap_checkpoint.index());
-        ASSERT_EQ(resp.snapshot_key(), "");
-        expected_snapshot_time = resp.snapshot_time();
-        first_call = false;
-      } else {
-        ASSERT_EQ(resp.checkpoint().op_id().term(), change_resp.cdc_sdk_checkpoint().term());
-        ASSERT_EQ(resp.checkpoint().op_id().index(), change_resp.cdc_sdk_checkpoint().index());
-        ASSERT_EQ(resp.snapshot_key(), change_resp.cdc_sdk_checkpoint().key());
-        ASSERT_EQ(resp.snapshot_time(), expected_snapshot_time);
-      }
-
-      change_resp = next_change_resp;
-      explicit_checkpoint = change_resp.cdc_sdk_checkpoint();
-
-      if (change_resp.cdc_sdk_checkpoint().key().empty() &&
-          change_resp.cdc_sdk_checkpoint().write_id() == 0 &&
-          change_resp.cdc_sdk_checkpoint().snapshot_time() == 0) {
-        break;
-      }
-    }
-  };
-
   auto req_table_id = GetColocatedTableId("test1");
   ASSERT_NE(req_table_id, "");
   // Assert that we get all records from the second table: "test1".
   auto cp_resp =
       ASSERT_RESULT(GetCDCSDKSnapshotCheckpoint(stream_id, tablets[0].tablet_id(), req_table_id));
-  verify_snapshot_checkpoint(cp_resp, req_table_id);
+  VerifySnapshotOnColocatedTables(
+      stream_id, tablets, cp_resp, req_table_id, "test1", snapshot_records_per_table);
   LOG(INFO) << "Verified snapshot records for table: test1";
 
   // Assert that we get all records from the second table: "test2".
@@ -6671,7 +6626,8 @@ TEST_F(CDCSDKYsqlTest, TestGetCheckpointForColocatedTableWithConsistentSnapshot)
   ASSERT_NE(req_table_id, "");
   cp_resp =
       ASSERT_RESULT(GetCDCSDKSnapshotCheckpoint(stream_id, tablets[0].tablet_id(), req_table_id));
-  verify_snapshot_checkpoint(cp_resp, req_table_id);
+  VerifySnapshotOnColocatedTables(
+      stream_id, tablets, cp_resp, req_table_id, "test2", snapshot_records_per_table);
   LOG(INFO) << "Verified snapshot records for table: test2";
 }
 

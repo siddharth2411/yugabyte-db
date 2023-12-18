@@ -574,6 +574,11 @@ class CDCSDKYsqlTest : public CDCSDKTestBase {
   void CDCSDKIntentsBatchReadWithAlterAndTabletLeaderSwitch(bool packed_row);
 
   void WaitForCompaction(YBTableName table);
+  void VerifySnapshotOnColocatedTables(
+      xrepl::StreamId stream_id,
+      google::protobuf::RepeatedPtrField<master::TabletLocationsPB> tablets,
+      const CDCSDKCheckpointPB& snapshot_bootstrap_checkpoint, const TableId& req_table_id,
+      const TableName& table_name, int64_t snapshot_records_per_table);
 
   Result<std::string> GetValueFromMap(const QLMapValuePB& map_value, const std::string& key);
 

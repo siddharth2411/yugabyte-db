@@ -3119,6 +3119,70 @@ namespace cdc {
             << " count_after_compaction: " << count_after_compaction;
   }
 
+  void CDCSDKYsqlTest::VerifySnapshotOnColocatedTables(
+      xrepl::StreamId stream_id,
+      google::protobuf::RepeatedPtrField<master::TabletLocationsPB> tablets,
+      const CDCSDKCheckpointPB& snapshot_bootstrap_checkpoint, const TableId& req_table_id,
+      const TableName& table_name, int64_t snapshot_records_per_table) {
+    bool first_call = true;
+    GetChangesResponsePB next_change_resp;
+    GetChangesResponsePB change_resp;
+    uint64 expected_snapshot_time;
+    int64_t seen_snapshot_records = 0;
+    CDCSDKCheckpointPB explicit_checkpoint;
+
+    while (true) {
+      if (first_call) {
+        next_change_resp = ASSERT_RESULT(GetChangesFromCDCWithExplictCheckpoint(
+            stream_id, tablets, &snapshot_bootstrap_checkpoint, &explicit_checkpoint,
+            req_table_id));
+      } else {
+        next_change_resp = ASSERT_RESULT(GetChangesFromCDCWithExplictCheckpoint(
+            stream_id, tablets, &change_resp.cdc_sdk_checkpoint(), &explicit_checkpoint,
+            req_table_id));
+      }
+
+      // count READ records
+      for (const auto& record : next_change_resp.cdc_sdk_proto_records()) {
+        if (record.row_message().op() == RowMessage::READ) {
+          seen_snapshot_records += 1;
+          ASSERT_EQ(record.row_message().table(), table_name);
+        }
+      }
+
+      // Get the checkpoint from cdc_state table
+      auto resp =
+          ASSERT_RESULT(GetCDCSnapshotCheckpoint(stream_id, tablets[0].tablet_id(), req_table_id));
+      ASSERT_GE(resp.snapshot_time(), 0);
+
+      if (first_call) {
+        ASSERT_EQ(resp.checkpoint().op_id().term(), snapshot_bootstrap_checkpoint.term());
+        ASSERT_EQ(resp.checkpoint().op_id().index(), snapshot_bootstrap_checkpoint.index());
+        ASSERT_EQ(resp.snapshot_key(), "");
+        expected_snapshot_time = resp.snapshot_time();
+        first_call = false;
+      } else {
+        ASSERT_EQ(resp.checkpoint().op_id().term(), change_resp.cdc_sdk_checkpoint().term());
+        ASSERT_EQ(resp.checkpoint().op_id().index(), change_resp.cdc_sdk_checkpoint().index());
+        ASSERT_EQ(resp.snapshot_key(), change_resp.cdc_sdk_checkpoint().key());
+        ASSERT_EQ(resp.snapshot_time(), expected_snapshot_time);
+      }
+
+      change_resp = next_change_resp;
+      explicit_checkpoint = change_resp.cdc_sdk_checkpoint();
+      LOG(INFO) << "Sid: change_resp checkpoint: "
+                << change_resp.cdc_sdk_checkpoint().DebugString();
+
+      if (change_resp.cdc_sdk_checkpoint().key().empty() &&
+          change_resp.cdc_sdk_checkpoint().write_id() == 0 &&
+          change_resp.cdc_sdk_checkpoint().snapshot_time() == 0) {
+        ASSERT_EQ(seen_snapshot_records, snapshot_records_per_table);
+        ASSERT_RESULT(UpdateSnapshotDone(stream_id, tablets, req_table_id));
+        break;
+      }
+    }
+  }
+
   Result<std::string> CDCSDKYsqlTest::GetValueFromMap(const QLMapValuePB& map_value,
     const std::string& key) {
     for (int index = 0; index < map_value.keys_size(); ++index) {
