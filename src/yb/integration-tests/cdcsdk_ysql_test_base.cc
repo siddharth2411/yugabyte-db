@@ -1027,8 +1027,26 @@ namespace cdc {
     }
 
     get_checkpoint_req.set_tablet_id(tablet_id);
-    RETURN_NOT_OK(
-        cdc_proxy_->GetCheckpoint(get_checkpoint_req, &get_checkpoint_resp, &get_checkpoint_rpc));
+
+    RETURN_NOT_OK(WaitFor(
+          [&]() -> Result<bool> {
+            RETURN_NOT_OK(cdc_proxy_->GetCheckpoint(
+                get_checkpoint_req, &get_checkpoint_resp, &get_checkpoint_rpc));
+
+            if (get_checkpoint_resp.has_error() &&
+                get_checkpoint_resp.error().code() != CDCErrorPB::TABLET_NOT_FOUND &&
+                get_checkpoint_resp.error().code() != CDCErrorPB::LEADER_NOT_READY) {
+              return STATUS_FORMAT(
+                  InternalError, "Response had error: $0", get_checkpoint_resp.DebugString());
+            }
+            if (!get_checkpoint_resp.has_error()) {
+              return true;
+            }
+
+            return false;
+          },
+          MonoDelta::FromSeconds(kRpcTimeout),
+          "GetCheckpoint timed out waiting for Leader to get ready"));
 
     return get_checkpoint_resp;
   }
@@ -3170,8 +3188,6 @@ namespace cdc {
 
       change_resp = next_change_resp;
       explicit_checkpoint = change_resp.cdc_sdk_checkpoint();
-      LOG(INFO) << "Sid: change_resp checkpoint: "
-                << change_resp.cdc_sdk_checkpoint().DebugString();
 
       if (change_resp.cdc_sdk_checkpoint().key().empty() &&
           change_resp.cdc_sdk_checkpoint().write_id() == 0 &&
