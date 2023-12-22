@@ -2044,7 +2044,6 @@ CDCSDK_TESTS_FOR_ALL_CHECKPOINT_OPTIONS(CDCSDKTabletSplitTest,
 TEST_F(CDCSDKYsqlTest, TestTabletSplitDuringConsistentSnapshot) {
   ANNOTATE_UNPROTECTED_WRITE(FLAGS_yb_enable_cdc_consistent_snapshot_streams) = true;
   ANNOTATE_UNPROTECTED_WRITE(FLAGS_cdc_snapshot_batch_size) = 100;
-  ANNOTATE_UNPROTECTED_WRITE(FLAGS_enable_tablet_split_of_cdcsdk_streamed_tables) = true;
   auto tablets = ASSERT_RESULT(SetUpCluster());
   auto table = ASSERT_RESULT(GetTable(&test_cluster_, kNamespaceName, kTableName));
   // Table having key:value_1 column
@@ -2098,6 +2097,37 @@ TEST_F(CDCSDKYsqlTest, TestTabletSplitDuringConsistentSnapshot) {
     }
   }
   ASSERT_EQ(reads_snapshot, 200);
+}
+
+TEST_F(CDCSDKYsqlTest, TestTabletSplitAfterConsistentSnapshotStreamCreation) {
+  ANNOTATE_UNPROTECTED_WRITE(FLAGS_yb_enable_cdc_consistent_snapshot_streams) = true;
+  ANNOTATE_UNPROTECTED_WRITE(FLAGS_cdc_snapshot_batch_size) = 100;
+  auto tablets = ASSERT_RESULT(SetUpCluster());
+  auto table = ASSERT_RESULT(GetTable(&test_cluster_, kNamespaceName, kTableName));
+  // Table having key:value_1 column
+  ASSERT_OK(WriteRows(1 /* start */, 10 /* end */, &test_cluster_));
+
+  xrepl::StreamId stream_id = ASSERT_RESULT(CreateConsistentSnapshotStream());
+
+  ASSERT_OK(test_client()->FlushTables(
+      {table}, /* add_indexes = */ false, /* timeout_secs = */ 30,
+      /* is_compaction = */ false));
+  WaitUntilSplitIsSuccesful(tablets.Get(0).tablet_id(), table);
+  LOG(INFO) << "Tablet split succeded";
+
+  google::protobuf::RepeatedPtrField<master::TabletLocationsPB> tablets_after_split;
+  ASSERT_OK(test_client()->GetTablets(table, 0, &tablets_after_split, nullptr, RequireTabletsRunning::kFalse, master::IncludeInactive::kTrue));
+  // tablets_after_split should have 3 tablets - one parent & two childrens
+  ASSERT_EQ(tablets_after_split.size(), 3);
+
+  ASSERT_OK(WriteRows(10 /* start */, 15 /* end */, &test_cluster_));
+
+  auto get_tablets_resp = ASSERT_RESULT(
+                GetTabletListToPollForCDC(stream_id, table.table_id()));
+  ASSERT_EQ(get_tablets_resp.tablet_checkpoint_pairs_size(), 1);
+  auto tablet_id = get_tablets_resp.tablet_checkpoint_pairs()[0].tablet_locations().tablet_id();
+  // tablet_id received in getTabletListToPoll should be parent's tablet_id.
+  ASSERT_EQ(tablet_id, tablets[0].tablet_id());
 }
 
 }  // namespace cdc

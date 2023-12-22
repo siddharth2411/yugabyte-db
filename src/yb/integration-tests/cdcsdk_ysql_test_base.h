@@ -677,7 +677,7 @@ class CDCSDKYsqlTest : public CDCSDKTestBase {
   void ConsumeSnapshotAndPerformDML(
       xrepl::StreamId stream_id, YBTableName table,
       google::protobuf::RepeatedPtrField<master::TabletLocationsPB> tablets,
-      CDCSDKCheckpointPB checkpoint, GetChangesResponsePB* change_resp); 
+      CDCSDKCheckpointPB checkpoint, GetChangesResponsePB* change_resp);
 };
 
 }  // namespace cdc
