@@ -2116,7 +2116,9 @@ TEST_F(CDCSDKYsqlTest, TestTabletSplitAfterConsistentSnapshotStreamCreation) {
   LOG(INFO) << "Tablet split succeded";
 
   google::protobuf::RepeatedPtrField<master::TabletLocationsPB> tablets_after_split;
-  ASSERT_OK(test_client()->GetTablets(table, 0, &tablets_after_split, nullptr, RequireTabletsRunning::kFalse, master::IncludeInactive::kTrue));
+  ASSERT_OK(test_client()->GetTablets(
+      table, 0, &tablets_after_split, nullptr, RequireTabletsRunning::kFalse,
+      master::IncludeInactive::kTrue));
   // tablets_after_split should have 3 tablets - one parent & two childrens
   ASSERT_EQ(tablets_after_split.size(), 3);
 
