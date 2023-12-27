@@ -2041,7 +2041,7 @@ void CDCSDKTabletSplitTest::TestCleanUpCDCStreamsMetadataDuringTabletSplit(
 CDCSDK_TESTS_FOR_ALL_CHECKPOINT_OPTIONS(CDCSDKTabletSplitTest,
                                         TestCleanUpCDCStreamsMetadataDuringTabletSplit);
 
-TEST_F(CDCSDKYsqlTest, TestTabletSplitDuringConsistentSnapshot) {
+TEST_F(CDCSDKTabletSplitTest, TestTabletSplitDuringConsistentSnapshot) {
   ANNOTATE_UNPROTECTED_WRITE(FLAGS_yb_enable_cdc_consistent_snapshot_streams) = true;
   ANNOTATE_UNPROTECTED_WRITE(FLAGS_cdc_snapshot_batch_size) = 100;
   auto tablets = ASSERT_RESULT(SetUpCluster());
@@ -2099,7 +2099,7 @@ TEST_F(CDCSDKYsqlTest, TestTabletSplitDuringConsistentSnapshot) {
   ASSERT_EQ(reads_snapshot, 200);
 }
 
-TEST_F(CDCSDKYsqlTest, TestTabletSplitAfterConsistentSnapshotStreamCreation) {
+TEST_F(CDCSDKTabletSplitTest, TestTabletSplitAfterConsistentSnapshotStreamCreation) {
   ANNOTATE_UNPROTECTED_WRITE(FLAGS_yb_enable_cdc_consistent_snapshot_streams) = true;
   ANNOTATE_UNPROTECTED_WRITE(FLAGS_cdc_snapshot_batch_size) = 100;
   auto tablets = ASSERT_RESULT(SetUpCluster());
