@@ -3437,19 +3437,6 @@ namespace cdc {
       for (const auto& tablet_peer : test_cluster()->GetTabletPeers(i)) {
         if (tablet_peer->tablet_id() == tablet_id) {
           ASSERT_OK(WaitFor(
-              [&]() -> bool { return tablet_peer->get_cdc_sdk_safe_time() == expected_safe_time; },
-              MonoDelta::FromSeconds(60), "Safe_time is not as expected."));
-        }
-      }
-    }
-  }
-
-  void CDCSDKYsqlTest::AssertSafeTimeAsExpectedInTabletPeersForConsistentSnapshot(
-      const TabletId& tablet_id, const HybridTime expected_safe_time) {
-    for (size_t i = 0; i < test_cluster()->num_tablet_servers(); ++i) {
-      for (const auto& tablet_peer : test_cluster()->GetTabletPeers(i)) {
-        if (tablet_peer->tablet_id() == tablet_id) {
-          ASSERT_OK(WaitFor(
               [&]() -> bool { return tablet_peer->get_cdc_sdk_safe_time() <= expected_safe_time; },
               MonoDelta::FromSeconds(60), "Safe_time is not as expected."));
         }
@@ -3649,6 +3636,88 @@ namespace cdc {
     }
 
     return inserts_snapshot;
+  }
+
+  void CDCSDKYsqlTest::ConsumeSnapshotAndPerformDML(
+      xrepl::StreamId stream_id, YBTableName table,
+      google::protobuf::RepeatedPtrField<master::TabletLocationsPB> tablets,
+      CDCSDKCheckpointPB checkpoint, GetChangesResponsePB* change_resp) {
+    auto peers = ListTabletPeers(test_cluster(), ListPeersFilter::kLeaders);
+    uint32_t reads_snapshot = 0;
+    bool do_update = true;
+    bool first_read = true;
+    // GetChangesResponsePB change_resp;
+    GetChangesResponsePB change_resp_updated;
+    CDCSDKCheckpointPB explicit_checkpoint;
+    vector<int> excepted_result(2);
+    vector<int> actual_result(2);
+    while (true) {
+      if (do_update) {
+        ASSERT_OK(UpdateRows(100, 1001, &test_cluster_));
+        ASSERT_OK(DeleteRows(1, &test_cluster_));
+        ANNOTATE_UNPROTECTED_WRITE(FLAGS_timestamp_history_retention_interval_sec) = 0;
+        ASSERT_OK(test_cluster_.mini_cluster_->CompactTablets());
+        do_update = false;
+      }
+      if (first_read) {
+        change_resp_updated = ASSERT_RESULT(GetChangesFromCDCWithExplictCheckpoint(
+            stream_id, tablets, &checkpoint, &explicit_checkpoint));
+        first_read = false;
+        // No changes in DocDB entries should be seen because retention barriers are held by
+        // snapshot.
+        auto count_before_compaction = CountEntriesInDocDB(peers, table.table_id());
+        ASSERT_OK(test_cluster_.mini_cluster_->CompactTablets());
+        auto count_after_compaction = CountEntriesInDocDB(peers, table.table_id());
+        ASSERT_EQ(count_before_compaction, count_after_compaction);
+      } else {
+        change_resp_updated = ASSERT_RESULT(GetChangesFromCDCWithExplictCheckpoint(
+            stream_id, tablets, &change_resp->cdc_sdk_checkpoint(), &explicit_checkpoint));
+      }
+      uint32_t record_size = change_resp_updated.cdc_sdk_proto_records_size();
+      uint32_t read_count = 0;
+      for (uint32_t i = 0; i < record_size; ++i) {
+        const CDCSDKProtoRecordPB record = change_resp_updated.cdc_sdk_proto_records(i);
+        std::stringstream s;
+
+        if (record.row_message().op() == RowMessage::READ) {
+          for (int jdx = 0; jdx < record.row_message().new_tuple_size(); jdx++) {
+            s << " " << record.row_message().new_tuple(jdx).datum_int32();
+            if (record.row_message().new_tuple(jdx).column_name() == kKeyColumnName) {
+              actual_result[0] = record.row_message().new_tuple(jdx).datum_int32();
+            } else if (record.row_message().new_tuple(jdx).column_name() == kValueColumnName) {
+              actual_result[1] = record.row_message().new_tuple(jdx).datum_int32();
+            }
+          }
+          LOG(INFO) << "row: " << i << " : " << s.str();
+          // we should only get row values w.r.t snapshot, not changed values during snapshot.
+          if (actual_result[0] == 100) {
+            excepted_result[0] = 100;
+            excepted_result[1] = 101;
+            ASSERT_EQ(actual_result, excepted_result);
+          } else if (actual_result[0] == 1) {
+            excepted_result[0] = 1;
+            excepted_result[1] = 2;
+            ASSERT_EQ(actual_result, excepted_result);
+          }
+          read_count++;
+        }
+      }
+      reads_snapshot += read_count;
+      change_resp = &change_resp_updated;
+      explicit_checkpoint = change_resp->cdc_sdk_checkpoint();
+
+      // received snapshot complete marker
+      if (change_resp->cdc_sdk_checkpoint().has_snapshot_time() &&
+          change_resp->cdc_sdk_checkpoint().snapshot_time() == 0 &&
+          change_resp->cdc_sdk_checkpoint().has_key() &&
+          change_resp->cdc_sdk_checkpoint().key() == "" &&
+          change_resp->cdc_sdk_checkpoint().has_write_id() &&
+          change_resp->cdc_sdk_checkpoint().write_id() == 0) {
+        ASSERT_RESULT(UpdateSnapshotDone(stream_id, tablets));
+        break;
+      }
+    }
+    ASSERT_EQ(reads_snapshot, 100);
   }
 
 

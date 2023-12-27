@@ -673,6 +673,11 @@ class CDCSDKYsqlTest : public CDCSDKTestBase {
   void TestHighIntentCountPersistencyAllNodesRestart(CDCCheckpointType checkpoint_type);
 
   void TestIntentCountPersistencyBootstrap(CDCCheckpointType checkpoint_type);
+  
+  void ConsumeSnapshotAndPerformDML(
+      xrepl::StreamId stream_id, YBTableName table,
+      google::protobuf::RepeatedPtrField<master::TabletLocationsPB> tablets,
+      CDCSDKCheckpointPB checkpoint, GetChangesResponsePB* change_resp); 
 };
 
 }  // namespace cdc

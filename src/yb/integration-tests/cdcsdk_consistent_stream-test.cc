@@ -1030,17 +1030,15 @@ TEST_F(CDCSDKYsqlTest, TestConsistentSnapshotWithCDCSDKConsistentStream) {
   int inserts_per_batch = 100;
 
   std::thread t1([&]() -> void {
-    PerformSingleAndMultiShardInserts(num_batches, inserts_per_batch, 20, 201);
+      PerformSingleAndMultiShardInserts(num_batches, inserts_per_batch, 20, 201);
   });
   std::thread t2([&]() -> void {
-    PerformSingleAndMultiShardInserts(
+      PerformSingleAndMultiShardInserts(
         num_batches, inserts_per_batch, 50, 201 + num_batches * inserts_per_batch);
   });
 
   t1.join();
   t2.join();
-
-  ASSERT_OK(test_client()->FlushTables({table.table_id()}, false, 1000, false));
 
   // Count the number of snapshot READs.
   uint32_t reads_snapshot = 0;
