@@ -3898,6 +3898,68 @@ Status ClusterAdminClient::ListCDCSDKStreams(const std::string& namespace_name) 
   return Status::OK();
 }
 
+Status ClusterAdminClient::UpdateCDCSDKStream(const std::string& namespace_name, const std::string& db_stream_id) {
+  master::ListCDCStreamsRequestPB req;
+  master::ListCDCStreamsResponsePB resp;
+  req.set_id_type(yb::master::IdTypePB::NAMESPACE_ID);
+
+  master::GetNamespaceInfoResponsePB namespace_info_resp;
+  RETURN_NOT_OK(yb_client_->GetNamespaceInfo("", namespace_name, YQL_DATABASE_PGSQL,
+                                              &namespace_info_resp));
+  req.set_namespace_id(namespace_info_resp.namespace_().id());
+
+  RpcController rpc;
+  rpc.set_timeout(timeout_);
+  RETURN_NOT_OK(master_replication_proxy_->ListCDCStreams(req, &resp, &rpc));
+
+  if (resp.has_error()) {
+    cout << "Error getting CDC stream list: " << resp.error().status().message() << endl;
+    return StatusFromPB(resp.error().status());
+  }
+
+  LOG(INFO) <<"Sid: ListCDCStream resp: " << resp.DebugString();
+
+  auto cdcsdk_stream_info = resp.streams().Get(0);
+  master::SysCDCStreamEntryPB updated_stream;
+  for(auto table_id: cdcsdk_stream_info.table_id()) {
+    updated_stream.add_table_id(table_id);
+  }
+  updated_stream.set_namespace_id(cdcsdk_stream_info.namespace_id());
+  for (const auto& entry : *cdcsdk_stream_info.mutable_options()) {
+    auto key = entry.key();
+    auto value = entry.value();
+    if (key == cdc::kStreamState) {
+      // We will set state explicitly.
+      continue;
+    }
+    auto new_option = updated_stream.add_options();
+    new_option->set_key(key);
+    new_option->set_value(value);
+  }
+  updated_stream.set_state(master::SysCDCStreamEntryPB::ACTIVE);
+
+  // client->UpdateCDCStream()
+  // Setting up request.
+  master::UpdateCDCStreamRequestPB update_req;
+  master::UpdateCDCStreamResponsePB update_resp;
+  
+  auto stream = update_req.add_streams();
+  stream->set_stream_id(db_stream_id);
+  stream->mutable_entry()->CopyFrom(updated_stream);
+
+  rpc.Reset();
+  rpc.set_timeout(timeout_);
+  RETURN_NOT_OK(master_replication_proxy_->UpdateCDCStream(update_req, &update_resp, &rpc));
+
+  if (update_resp.has_error()) {
+    cout << "Error updating CDC stream: " << update_resp.error().status().message() << endl;
+    return StatusFromPB(update_resp.error().status());
+  }
+  cout << "Updated stream "<< db_stream_id << " to ACTIVE state \n";
+  return Status::OK();
+
+}
+
 Status ClusterAdminClient::GetCDCDBStreamInfo(const std::string& db_stream_id) {
   master::GetCDCDBStreamInfoRequestPB req;
   master::GetCDCDBStreamInfoResponsePB resp;

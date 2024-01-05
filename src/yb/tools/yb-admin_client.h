@@ -401,6 +401,8 @@ class ClusterAdminClient {
 
   Status ListCDCSDKStreams(const std::string& namespace_name);
 
+  Status UpdateCDCSDKStream(const std::string& namespace_name, const std::string& db_stream_id);
+
   Status GetCDCDBStreamInfo(const std::string& db_stream_id);
 
   Status YsqlBackfillReplicationSlotNameToCDCSDKStream(

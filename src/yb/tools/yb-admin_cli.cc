@@ -1872,6 +1872,20 @@ Status list_change_data_streams_action(
   return Status::OK();
 }
 
+const auto update_change_data_stream_args = "<namespace> <db_stream_id>";
+Status update_change_data_stream_action(
+    const ClusterAdminCli::CLIArguments& args, ClusterAdminClient* client) {
+  if (args.size() < 2) {
+    return ClusterAdminCli::kInvalidArguments;
+  }
+  const string namespace_name = args[0];
+  const string db_stream_id = args[1];
+  string msg =  Format("Unable to list CDC streams for namespace $0", namespace_name);
+
+  RETURN_NOT_OK_PREPEND(client->UpdateCDCSDKStream(namespace_name, db_stream_id), msg);
+  return Status::OK();
+}
+
 const auto get_change_data_stream_info_args = "<db_stream_id>";
 Status get_change_data_stream_info_action(
     const ClusterAdminCli::CLIArguments& args, ClusterAdminClient* client) {
@@ -2309,6 +2323,7 @@ void ClusterAdminCli::RegisterCommandHandlers() {
   REGISTER_COMMAND(delete_change_data_stream);
   REGISTER_COMMAND(list_cdc_streams);
   REGISTER_COMMAND(list_change_data_streams);
+  REGISTER_COMMAND(update_change_data_stream);
   REGISTER_COMMAND(get_change_data_stream_info);
   REGISTER_COMMAND(ysql_backfill_change_data_stream_with_replication_slot);
   // xCluster commands
