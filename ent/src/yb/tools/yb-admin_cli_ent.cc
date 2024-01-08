@@ -722,6 +722,19 @@ void ClusterAdminCli::RegisterCommandHandlers(ClusterAdminClientClass* client) {
     });
 
   Register(
+    "update_change_data_stream", " <namespace> <db_stream_id>",
+    [client](const CLIArguments& args) -> Status {
+      if (args.size() != 2) {
+        return ClusterAdminCli::kInvalidArguments;
+      }
+      const string namespace_name = args[0];
+      const string db_stream_id = args[1];
+
+      RETURN_NOT_OK_PREPEND(client->UpdateCDCSDKStream(namespace_name, db_stream_id), Substitute("Unable to list CDC streams for namespace $0", namespace_name));
+      return Status::OK();
+    });
+
+  Register(
     "get_change_data_stream_info", " <db_stream_id>",
     [client](const CLIArguments& args) -> Status {
       if (args.size() != 0 && args.size() != 1) {
