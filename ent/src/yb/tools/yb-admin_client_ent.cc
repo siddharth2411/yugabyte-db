@@ -1418,15 +1418,17 @@ Status ClusterAdminClient::ListCDCSDKStreams(const std::string& namespace_name) 
   return Status::OK();
 }
 
-Status ClusterAdminClient::UpdateCDCSDKStream(const std::string& namespace_name, const std::string& db_stream_id) {
+Status ClusterAdminClient::UpdateCDCSDKStream(
+    const TypedNamespaceName& ns, const std::string& db_stream_id) {
+  // Get the list of CDC streams for the namespace.
   master::ListCDCStreamsRequestPB req;
   master::ListCDCStreamsResponsePB resp;
   req.set_id_type(yb::master::IdTypePB::NAMESPACE_ID);
 
+  const std::string namespace_name = ns.name;
   master::GetNamespaceInfoResponsePB namespace_info_resp;
-  RETURN_NOT_OK(yb_client_->GetNamespaceInfo("", namespace_name, YQL_DATABASE_PGSQL,
-                                              &namespace_info_resp));
-  cout<<"sid: namespace_id: " << namespace_info_resp.namespace_().id();
+  RETURN_NOT_OK(
+      yb_client_->GetNamespaceInfo("", namespace_name, YQL_DATABASE_PGSQL, &namespace_info_resp));
   req.set_namespace_id(namespace_info_resp.namespace_().id());
 
   RpcController rpc;
@@ -1438,13 +1440,19 @@ Status ClusterAdminClient::UpdateCDCSDKStream(const std::string& namespace_name,
     return StatusFromPB(resp.error().status());
   }
 
-  auto cdcsdk_stream_info = resp.streams().Get(0);
-  master::SysCDCStreamEntryPB updated_stream;
-  for(auto table_id: cdcsdk_stream_info.table_id()) {
-    updated_stream.add_table_id(table_id);
+  // Get the cdc stream info for the received stream id.
+  master::CDCStreamInfoPB cdcsdk_stream_info;
+  for (auto stream_info : resp.streams()) {
+    if (stream_info.stream_id() == db_stream_id) {
+      cdcsdk_stream_info = stream_info;
+      break;
+    }
   }
-  cout<<"Sid: setting ns_id in update_Stream: " << cdcsdk_stream_info.namespace_id();
+
+  master::SysCDCStreamEntryPB updated_stream;
+  updated_stream.mutable_table_id()->CopyFrom(cdcsdk_stream_info.table_id());
   updated_stream.set_namespace_id(namespace_info_resp.namespace_().id());
+
   for (const auto& entry : *cdcsdk_stream_info.mutable_options()) {
     auto key = entry.key();
     auto value = entry.value();
@@ -1458,14 +1466,10 @@ Status ClusterAdminClient::UpdateCDCSDKStream(const std::string& namespace_name,
   }
   updated_stream.set_state(master::SysCDCStreamEntryPB::ACTIVE);
 
-  // client->UpdateCDCStream()
-  // Setting up request.
   master::UpdateCDCStreamRequestPB update_req;
   master::UpdateCDCStreamResponsePB update_resp;
-
-  auto stream = update_req.add_streams();
-  stream->set_stream_id(db_stream_id);
-  stream->mutable_entry()->CopyFrom(updated_stream);
+  update_req.set_stream_id(db_stream_id);
+  update_req.mutable_entry()->CopyFrom(updated_stream);
 
   rpc.Reset();
   rpc.set_timeout(timeout_);
@@ -1475,9 +1479,8 @@ Status ClusterAdminClient::UpdateCDCSDKStream(const std::string& namespace_name,
     cout << "Error updating CDC stream: " << update_resp.error().status().message() << endl;
     return StatusFromPB(update_resp.error().status());
   }
-  cout << "Updated stream "<< db_stream_id << " to ACTIVE state \n";
+  cout << "Updated stream " << db_stream_id << " to ACTIVE state \n";
   return Status::OK();
-
 }
 
 Status ClusterAdminClient::GetCDCDBStreamInfo(const std::string& db_stream_id) {

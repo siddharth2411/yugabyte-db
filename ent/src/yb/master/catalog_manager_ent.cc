@@ -3402,16 +3402,10 @@ Status CatalogManager::DeleteCDCStreamsMetadataForTables(const vector<TableId>& 
 
 Status CatalogManager::AddNewTableToCDCDKStreamsMetadata(
     const TableId& table_id, const NamespaceId& ns_id) {
-  LOG(INFO) <<"Sid: acquiring mutex";
-  LOG(INFO) << "Sid: table_id: " << table_id << " ns_id: " << ns_id;
   SharedLock lock(mutex_);
-  LOG(INFO) <<"Sid: took mutex";
   for (const auto& entry : cdc_stream_map_) {
-    LOG(INFO) <<"Sid: iterating over cdc_stream_map entry";
-    LOG(INFO) <<"entry.first: " << entry.first <<"entry.second: " << entry.second->namespace_id();
     // We only look for streams on the same namespace as the table.
     if (entry.second->namespace_id() == ns_id) {
-      LOG(INFO) <<"Sid: nsid check passed";
       // We get the write lock before modifying 'cdcsdk_unprocessed_tables'.
       auto stream_lock = entry.second->LockForWrite();
       if (!stream_lock->is_deleting()) {
@@ -3419,10 +3413,7 @@ Status CatalogManager::AddNewTableToCDCDKStreamsMetadata(
         // master restart and leadership change, the catalog manager bg thread will scan all streams
         // to find all missing tables and repopulate this 'cdcsdk_unprocessed_tables' field, through
         // the method: FindAllCDCSDKStreamsMissingTables.
-        LOG(INFO) <<"Adding table_id to cdcsdk_unprocessed_tables" << table_id;
         entry.second->cdcsdk_unprocessed_tables.insert(table_id);
-      } else {
-        LOG(INFO) <<"Sid: stream_lock is in is_deleting state";
       }
     }
   }
@@ -3862,10 +3853,8 @@ Status CatalogManager::FindCDCSDKStreamsForAddedTables(
 
     auto ltm = stream_info->LockForRead();
     if (ltm->pb.state() == SysCDCStreamEntryPB::ACTIVE) {
-      LOG(INFO) <<"Sid: inside For loop";
       const auto cdcsdk_unprocessed_tables = stream_info->cdcsdk_unprocessed_tables;
       for (const auto& table_id : cdcsdk_unprocessed_tables) {
-        LOG(INFO) <<"Sid: Looking for table_id in table_ids_map_: " << table_id;
         auto table = FindPtrOrNull(*table_ids_map_, table_id);
         Schema schema;
         auto status = table->GetSchema(&schema);
@@ -3966,11 +3955,6 @@ Status CatalogManager::AddTabletEntriesToCDCSDKStreamsForNewTables(
   }
   RETURN_NOT_OK(cdc_table.Open(cdc_state_table_name, ybclient));
   std::shared_ptr<client::YBSession> session = ybclient->NewSession();
-
-  LOG(INFO) <<"Sid: table_to_unprocessed_streams_map content:";
-  for(auto entry: table_to_unprocessed_streams_map) {
-    LOG(INFO) <<"table_id: " << entry.first;
-  }
 
   int32_t processed_tables = 0;
   for (const auto& [table_id, streams] : table_to_unprocessed_streams_map) {
