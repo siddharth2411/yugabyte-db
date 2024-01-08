@@ -241,8 +241,6 @@ void CatalogManagerBgTasks::Run() {
         Status s =
             catalog_manager_->FindCDCSDKStreamsForAddedTables(&table_unprocessed_streams_map);
 
-        LOG(INFO) <<"table_unprocessed_streams_map size: " << table_unprocessed_streams_map.size();
-
         if (s.ok() && !table_unprocessed_streams_map.empty()) {
           s = catalog_manager_->AddTabletEntriesToCDCSDKStreamsForNewTables(
               table_unprocessed_streams_map);
