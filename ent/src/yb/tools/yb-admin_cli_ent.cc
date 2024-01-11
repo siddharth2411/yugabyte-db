@@ -722,7 +722,7 @@ void ClusterAdminCli::RegisterCommandHandlers(ClusterAdminClientClass* client) {
     });
 
   Register(
-      "update_change_data_stream", " <namespace> <db_stream_id>",
+      "set_stream_state_as_active", " <namespace> <db_stream_id> [<db_stream_id>]...",
       [client](const CLIArguments& args) -> Status {
         if (args.size() < 2) {
           return ClusterAdminCli::kInvalidArguments;
@@ -734,13 +734,16 @@ void ClusterAdminCli::RegisterCommandHandlers(ClusterAdminClientClass* client) {
         SCHECK_EQ(
             database.db_type, YQL_DATABASE_PGSQL, InvalidArgument,
             Format("Wrong database type: $0", YQLDatabase_Name(database.db_type)));
-
-        const string db_stream_id = args[1];
+        std::unordered_set<std::string> db_stream_ids;
+        size_t i = 1;
+        while (i < args.size()) {
+          db_stream_ids.insert(args[i]);
+          ++i;
+        }
 
         RETURN_NOT_OK_PREPEND(
-            client->UpdateCDCSDKStream(database, db_stream_id),
-            Substitute(
-                "Unable to update CDC stream $0 for namespace $1", db_stream_id, namespace_name));
+            client->SetCDCSDKStreamAsActive(database, db_stream_ids),
+            Substitute("Unable to update CDC streams for namespace $1", namespace_name));
         return Status::OK();
       });
 

@@ -106,7 +106,8 @@ class ClusterAdminClient : public yb::tools::ClusterAdminClient {
 
   Status ListCDCSDKStreams(const std::string& namespace_name);
 
-  Status UpdateCDCSDKStream(const TypedNamespaceName& ns, const std::string& db_stream_id);
+  Status SetCDCSDKStreamAsActive(
+      const TypedNamespaceName& ns, const std::unordered_set<std::string>& db_stream_ids);
 
   Status GetCDCDBStreamInfo(const std::string& db_stream_id);
 

@@ -1418,8 +1418,8 @@ Status ClusterAdminClient::ListCDCSDKStreams(const std::string& namespace_name) 
   return Status::OK();
 }
 
-Status ClusterAdminClient::UpdateCDCSDKStream(
-    const TypedNamespaceName& ns, const std::string& db_stream_id) {
+Status ClusterAdminClient::SetCDCSDKStreamAsActive(
+    const TypedNamespaceName& ns, const std::unordered_set<std::string>& db_stream_ids) {
   // Get the list of CDC streams for the namespace.
   master::ListCDCStreamsRequestPB req;
   master::ListCDCStreamsResponsePB resp;
@@ -1441,35 +1441,38 @@ Status ClusterAdminClient::UpdateCDCSDKStream(
   }
 
   // Get the cdc stream info for the received stream id.
-  master::CDCStreamInfoPB cdcsdk_stream_info;
+  std::vector<master::CDCStreamInfoPB> cdcsdk_streams_info;
+  cdcsdk_streams_info.reserve(db_stream_ids.size());
   for (auto stream_info : resp.streams()) {
-    if (stream_info.stream_id() == db_stream_id) {
-      cdcsdk_stream_info = stream_info;
-      break;
+    if (db_stream_ids.contains(stream_info.stream_id())) {
+      cdcsdk_streams_info.push_back(stream_info);
     }
   }
-
-  master::SysCDCStreamEntryPB updated_stream;
-  updated_stream.mutable_table_id()->CopyFrom(cdcsdk_stream_info.table_id());
-  updated_stream.set_namespace_id(namespace_info_resp.namespace_().id());
-
-  for (const auto& entry : *cdcsdk_stream_info.mutable_options()) {
-    auto key = entry.key();
-    auto value = entry.value();
-    if (key == cdc::kStreamState) {
-      // We will set state explicitly.
-      continue;
-    }
-    auto new_option = updated_stream.add_options();
-    new_option->set_key(key);
-    new_option->set_value(value);
-  }
-  updated_stream.set_state(master::SysCDCStreamEntryPB::ACTIVE);
 
   master::UpdateCDCStreamRequestPB update_req;
   master::UpdateCDCStreamResponsePB update_resp;
-  update_req.set_stream_id(db_stream_id);
-  update_req.mutable_entry()->CopyFrom(updated_stream);
+  for (auto& stream_info : cdcsdk_streams_info) {
+    master::SysCDCStreamEntryPB updated_stream_info;
+    updated_stream_info.set_namespace_id(namespace_info_resp.namespace_().id());
+    updated_stream_info.mutable_table_id()->CopyFrom(stream_info.table_id());
+
+    for (const auto& entry : *stream_info.mutable_options()) {
+      auto key = entry.key();
+      auto value = entry.value();
+      if (key == cdc::kStreamState) {
+        // We will set state explicitly.
+        continue;
+      }
+      auto new_option = updated_stream_info.add_options();
+      new_option->set_key(key);
+      new_option->set_value(value);
+    }
+    updated_stream_info.set_state(master::SysCDCStreamEntryPB::ACTIVE);
+
+    auto stream = update_req.add_streams();
+    stream->set_stream_id(stream_info.stream_id());
+    stream->mutable_entry()->CopyFrom(updated_stream_info);
+  }
 
   rpc.Reset();
   rpc.set_timeout(timeout_);
@@ -1479,7 +1482,7 @@ Status ClusterAdminClient::UpdateCDCSDKStream(
     cout << "Error updating CDC stream: " << update_resp.error().status().message() << endl;
     return StatusFromPB(update_resp.error().status());
   }
-  cout << "Updated stream " << db_stream_id << " to ACTIVE state \n";
+  cout << "Updated streams to ACTIVE state \n";
   return Status::OK();
 }
 
