@@ -1333,7 +1333,7 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestAddTableAfterDropTable)) {
         kTableName));
     idx += 1;
   }
-  auto stream_id = ASSERT_RESULT(CreateDBStreamWithReplicationSlot());
+  auto stream_id = ASSERT_RESULT(CreateDBStream(EXPLICIT));
   SleepFor(MonoDelta::FromSeconds(2));
   DropTable(&test_cluster_, "test_table_1");
 
@@ -1363,21 +1363,22 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestAddTableAfterDropTable)) {
     expected_tablet_ids.insert(tablets[idx].Get(0).tablet_id());
   }
 
-  CDCStateTable cdc_state_table(test_client());
-  Status s;
   std::unordered_set<TabletId> tablets_found;
-  for (auto row_result : ASSERT_RESULT(
-           cdc_state_table.GetTableRange(CDCStateTableEntrySelector().IncludeCheckpoint(), &s))) {
-    ASSERT_OK(row_result);
-    auto& row = *row_result;
-    LOG(INFO) << "Read cdc_state table row with tablet_id: " << row.key.tablet_id
-              << " stream_id: " << row.key.stream_id
-              << " checkpoint: " << row.checkpoint->ToString();
-    if (row.key.stream_id == stream_id) {
-      tablets_found.insert(row.key.tablet_id);
+  client::TableHandle table_handle;
+  client::YBTableName cdc_state_table(
+      YQL_DATABASE_CQL, master::kSystemNamespaceName, master::kCdcStateTableName);
+  ASSERT_OK(table_handle.Open(cdc_state_table, test_client()));
+
+  for (const auto& row : client::TableRange(table_handle)) {
+    const auto& row_stream_id = row.column(master::kCdcStreamIdIdx).string_value();
+    const auto& tablet_id = row.column(master::kCdcTabletIdIdx).string_value();
+    const auto& checkpoint = row.column(master::kCdcCheckpointIdx).string_value();
+    LOG(INFO) << "Read cdc_state table row for tablet_id: " << tablet_id
+              << " and stream_id: " << stream_id << ", with checkpoint: " << checkpoint;
+    if (row_stream_id == stream_id) {
+      tablets_found.insert(tablet_id);
     }
   }
-  ASSERT_OK(s);
   LOG(INFO) << "tablets found: " << AsString(tablets_found)
             << ", expected tablets: " << AsString(expected_tablet_ids);
   ASSERT_EQ(expected_tablet_ids, tablets_found);
@@ -1403,7 +1404,7 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestAddTableAfterDropTableAndMast
         kTableName));
     idx += 1;
   }
-  xrepl::StreamId stream_id = ASSERT_RESULT(CreateDBStreamWithReplicationSlot());
+  auto stream_id = ASSERT_RESULT(CreateDBStream(EXPLICIT));
   SleepFor(MonoDelta::FromSeconds(2));
   DropTable(&test_cluster_, "test_table_1");
 
@@ -1451,21 +1452,22 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestAddTableAfterDropTableAndMast
     expected_tablet_ids.insert(tablets[idx].Get(0).tablet_id());
   }
 
-  CDCStateTable cdc_state_table(test_client());
-  Status s;
   std::unordered_set<TabletId> tablets_found;
-  for (auto row_result : ASSERT_RESULT(
-           cdc_state_table.GetTableRange(CDCStateTableEntrySelector().IncludeCheckpoint(), &s))) {
-    ASSERT_OK(row_result);
-    auto& row = *row_result;
-    LOG(INFO) << "Read cdc_state table row with tablet_id: " << row.key.tablet_id
-              << " stream_id: " << row.key.stream_id
-              << " checkpoint: " << row.checkpoint->ToString();
-    if (row.key.stream_id == stream_id) {
-      tablets_found.insert(row.key.tablet_id);
+  client::TableHandle table_handle;
+  client::YBTableName cdc_state_table(
+      YQL_DATABASE_CQL, master::kSystemNamespaceName, master::kCdcStateTableName);
+  ASSERT_OK(table_handle.Open(cdc_state_table, test_client()));
+
+  for (const auto& row : client::TableRange(table_handle)) {
+    const auto& row_stream_id = row.column(master::kCdcStreamIdIdx).string_value();
+    const auto& tablet_id = row.column(master::kCdcTabletIdIdx).string_value();
+    const auto& checkpoint = row.column(master::kCdcCheckpointIdx).string_value();
+    LOG(INFO) << "Read cdc_state table row for tablet_id: " << tablet_id
+              << " and stream_id: " << stream_id << ", with checkpoint: " << checkpoint;
+    if (row_stream_id == stream_id) {
+      tablets_found.insert(tablet_id);
     }
   }
-  ASSERT_OK(s);
   LOG(INFO) << "tablets found: " << AsString(tablets_found)
             << ", expected tablets: " << AsString(expected_tablet_ids);
   ASSERT_EQ(expected_tablet_ids, tablets_found);
