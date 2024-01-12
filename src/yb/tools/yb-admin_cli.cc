@@ -1758,7 +1758,7 @@ void ClusterAdminCli::RegisterCommandHandlers(ClusterAdminClient* client) {
 
         RETURN_NOT_OK_PREPEND(
             client->SetCDCSDKStreamAsActive(database, db_stream_ids),
-            Substitute("Unable to update CDC streams for namespace $1", namespace_name));
+            Substitute("Unable to update CDC streams for namespace $0", namespace_name));
         return Status::OK();
       });
 

@@ -3751,42 +3751,42 @@ Status ClusterAdminClient::SetCDCSDKStreamAsActive(
         }
   }
 
-  master::UpdateCDCStreamRequestPB update_req;
-  master::UpdateCDCStreamResponsePB update_resp;
-  for (auto& stream_info : cdcsdk_streams_info) {
-        master::SysCDCStreamEntryPB updated_stream_info;
-        updated_stream_info.set_namespace_id(namespace_info_resp.namespace_().id());
-        updated_stream_info.mutable_table_id()->CopyFrom(stream_info.table_id());
-        updated_stream_info.set_transactional(stream_info.transactional());
-
-        for (const auto& entry : *stream_info.mutable_options()) {
-      auto key = entry.key();
-      auto value = entry.value();
-      if (key == cdc::kStreamState) {
-        // We will set state explicitly.
-        continue;
-      }
-      auto new_option = updated_stream_info.add_options();
-      new_option->set_key(key);
-      new_option->set_value(value);
-        }
-        updated_stream_info.set_state(master::SysCDCStreamEntryPB::ACTIVE);
-
-        auto stream = update_req.add_streams();
-        stream->set_stream_id(stream_info.stream_id());
-        stream->mutable_entry()->CopyFrom(updated_stream_info);
-  }
-
-  rpc.Reset();
-  rpc.set_timeout(timeout_);
-  RETURN_NOT_OK(master_replication_proxy_->UpdateCDCStream(update_req, &update_resp, &rpc));
-
-  if (update_resp.has_error()) {
-        cout << "Error updating CDC stream: " << update_resp.error().status().message() << endl;
-        return StatusFromPB(update_resp.error().status());
-  }
-
   if (streams_to_be_updated.size() > 0) {
+        master::UpdateCDCStreamRequestPB update_req;
+        master::UpdateCDCStreamResponsePB update_resp;
+        for (auto& stream_info : cdcsdk_streams_info) {
+      master::SysCDCStreamEntryPB updated_stream_info;
+      updated_stream_info.set_namespace_id(namespace_info_resp.namespace_().id());
+      updated_stream_info.mutable_table_id()->CopyFrom(stream_info.table_id());
+      updated_stream_info.set_transactional(stream_info.transactional());
+
+      for (const auto& entry : *stream_info.mutable_options()) {
+        auto key = entry.key();
+        auto value = entry.value();
+        if (key == cdc::kStreamState) {
+          // We will set state explicitly.
+          continue;
+        }
+        auto new_option = updated_stream_info.add_options();
+        new_option->set_key(key);
+        new_option->set_value(value);
+      }
+      updated_stream_info.set_state(master::SysCDCStreamEntryPB::ACTIVE);
+
+      auto stream = update_req.add_streams();
+      stream->set_stream_id(stream_info.stream_id());
+      stream->mutable_entry()->CopyFrom(updated_stream_info);
+        }
+
+        rpc.Reset();
+        rpc.set_timeout(timeout_);
+        RETURN_NOT_OK(master_replication_proxy_->UpdateCDCStream(update_req, &update_resp, &rpc));
+
+        if (update_resp.has_error()) {
+      cout << "Error updating CDC stream: " << update_resp.error().status().message() << endl;
+      return StatusFromPB(update_resp.error().status());
+        }
+
         cout << "Successfully updated the streams " << AsString(streams_to_be_updated)
              << " to ACTIVE state \n";
   }
