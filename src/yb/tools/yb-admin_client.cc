@@ -3757,18 +3757,18 @@ Status ClusterAdminClient::SetCDCSDKStreamAsActive(
         master::SysCDCStreamEntryPB updated_stream_info;
         updated_stream_info.set_namespace_id(namespace_info_resp.namespace_().id());
         updated_stream_info.mutable_table_id()->CopyFrom(stream_info.table_id());
-				updated_stream_info.set_transactional(stream_info.transactional());
+        updated_stream_info.set_transactional(stream_info.transactional());
 
         for (const auto& entry : *stream_info.mutable_options()) {
-						auto key = entry.key();
-						auto value = entry.value();
-						if (key == cdc::kStreamState) {
-							// We will set state explicitly.
-							continue;
-						}
-						auto new_option = updated_stream_info.add_options();
-						new_option->set_key(key);
-						new_option->set_value(value);
+      auto key = entry.key();
+      auto value = entry.value();
+      if (key == cdc::kStreamState) {
+        // We will set state explicitly.
+        continue;
+      }
+      auto new_option = updated_stream_info.add_options();
+      new_option->set_key(key);
+      new_option->set_value(value);
         }
         updated_stream_info.set_state(master::SysCDCStreamEntryPB::ACTIVE);
 
