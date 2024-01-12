@@ -215,6 +215,27 @@ class CDCSDKYsqlTest : public CDCSDKTestBase {
     ASSERT_EQ(op_id.index, index);
   }
 
+  void VerifyTablesInStreamMetadata(
+      const std::string& stream_id, const std::unordered_set<std::string>& expected_table_ids,
+      const std::string& timeout_msg) {
+    ASSERT_OK(WaitFor(
+        [&]() -> Result<bool> {
+          auto get_resp = GetDBStreamInfo(stream_id);
+          if (get_resp.ok() && !get_resp->has_error()) {
+            const uint64_t table_info_size = get_resp->table_info_size();
+            if (table_info_size == expected_table_ids.size()) {
+              std::unordered_set<std::string> table_ids;
+              for (auto entry : get_resp->table_info()) {
+                table_ids.insert(entry.table_id());
+              }
+              if (expected_table_ids == table_ids) return true;
+            }
+          }
+          return false;
+        },
+        MonoDelta::FromSeconds(60), timeout_msg));
+  }
+
   Status WriteRowsToTwoTables(
       uint32_t start, uint32_t end, Cluster* cluster, bool flag, const char* const first_table_name,
       const char* const second_table_name, uint32_t num_cols = 2) {
@@ -1987,6 +2008,23 @@ class CDCSDKYsqlTest : public CDCSDKTestBase {
     argv.push_back(AsString(test_cluster_.mini_cluster_->mini_master(0)->bound_rpc_addr()));
     argv.push_back("create_database_snapshot");
     argv.push_back(ns);
+    RETURN_NOT_OK(Subprocess::Call(argv));
+
+    return Status::OK();
+  }
+
+  Status SetStreamAsActiveState(
+      const std::string& ns, const std::unordered_set<std::string>& stream_ids) {
+    string tool_path = GetToolPath("../bin", "yb-admin");
+    vector<string> argv;
+    argv.push_back(tool_path);
+    argv.push_back("--master_addresses");
+    argv.push_back(AsString(test_cluster_.mini_cluster_->GetMasterAddresses()));
+    argv.push_back("set_stream_state_as_active");
+    argv.push_back(ns);
+    for (const auto& stream_id : stream_ids) {
+      argv.push_back(stream_id);
+    }
     RETURN_NOT_OK(Subprocess::Call(argv));
 
     return Status::OK();

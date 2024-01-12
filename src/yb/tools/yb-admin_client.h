@@ -389,6 +389,9 @@ class ClusterAdminClient {
 
   Status ListCDCSDKStreams(const std::string& namespace_name);
 
+  Status SetCDCSDKStreamAsActive(
+      const TypedNamespaceName& ns, const std::unordered_set<std::string>& db_stream_ids);
+
   Status GetCDCDBStreamInfo(const std::string& db_stream_id);
 
   Status SetupUniverseReplication(const std::string& producer_uuid,
