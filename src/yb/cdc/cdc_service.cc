@@ -15,6 +15,7 @@
 #include <algorithm>
 #include <chrono>
 #include <memory>
+#include <queue>
 
 #include <boost/algorithm/string.hpp>
 #include <boost/lexical_cast.hpp>
@@ -22,7 +23,6 @@
 #include <boost/multi_index/mem_fun.hpp>
 #include <boost/multi_index/member.hpp>
 #include <boost/multi_index_container.hpp>
-#include <queue>
 
 #include "yb/cdc/cdc_error.h"
 #include "yb/cdc/cdc_producer.h"
@@ -85,7 +85,6 @@
 #include "yb/util/stol_utils.h"
 #include "yb/util/stopwatch.h"
 #include "yb/util/sync_point.h"
-#include "yb/util/test_macros.h"
 #include "yb/util/test_macros.h"
 #include "yb/util/thread.h"
 #include "yb/util/trace.h"
@@ -4299,7 +4298,7 @@ void CDCServiceImpl::InitVirtualWALForCDC(
 }
 
 Status CDCServiceImpl::InitVirtualWALInternal(
-    const std::string& stream_id, std::unordered_set<TableId>& table_list, HostPort hostport,
+    const std::string& stream_id, const std::unordered_set<TableId>& table_list, HostPort hostport,
     CoarseTimePoint deadline) {
   LOG(INFO) << "InitVirtualWAL:Here";
   for (const auto& table_id : table_list) {
@@ -4445,7 +4444,7 @@ Status CDCServiceImpl::GetConsistentChangesInternal(
 }
 
 Status CDCServiceImpl::GetChangesInternal(
-    const std::string& stream_id, std::unordered_set<TabletId>& tablet_to_poll_list,
+    const std::string& stream_id, const std::unordered_set<TabletId> tablet_to_poll_list,
     HostPort hostport, CoarseTimePoint deadline) {
   for (const auto& tablet_id : tablet_to_poll_list) {
     GetChangesRequestPB req;
