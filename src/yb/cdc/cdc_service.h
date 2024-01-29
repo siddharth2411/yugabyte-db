@@ -226,8 +226,8 @@ class CDCServiceImpl : public CDCServiceIf {
       rpc::RpcContext context) override;
 
   Status InitVirtualWALInternal(
-      const std::string& stream_id, const std::unordered_set<TableId>& table_list, HostPort hostport,
-      CoarseTimePoint deadline);
+      const std::string& stream_id, const std::unordered_set<TableId>& table_list,
+      HostPort hostport, CoarseTimePoint deadline);
 
   Status GetTabletListAndCheckpoint(
       const std::string& stream_id, const TableId& table_id, HostPort hostport,
