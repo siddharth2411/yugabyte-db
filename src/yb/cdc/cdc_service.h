@@ -13,6 +13,7 @@
 #pragma once
 
 #include <memory>
+#include <queue>
 
 #include "yb/cdc/xrepl_types.h"
 #include "yb/cdc/xrepl_metrics.h"
@@ -38,7 +39,6 @@
 #include "yb/util/semaphore.h"
 
 #include <boost/optional.hpp>
-#include <queue>
 
 namespace rocksdb {
 
@@ -226,7 +226,7 @@ class CDCServiceImpl : public CDCServiceIf {
       rpc::RpcContext context) override;
 
   Status InitVirtualWALInternal(
-      const std::string& stream_id, std::unordered_set<TableId>& table_list, HostPort hostport,
+      const std::string& stream_id, const std::unordered_set<TableId>& table_list, HostPort hostport,
       CoarseTimePoint deadline);
 
   Status GetTabletListAndCheckpoint(
@@ -238,7 +238,7 @@ class CDCServiceImpl : public CDCServiceIf {
       CoarseTimePoint deadline);
 
   Status GetChangesInternal(
-      const std::string& stream_id, std::unordered_set<TabletId>& tablet_to_poll_list,
+      const std::string& stream_id, const std::unordered_set<TabletId> tablet_to_poll_list,
       HostPort hostport, CoarseTimePoint deadline);
 
   Result<CDCSDKProtoRecordPB> FindConsistentRecord(
