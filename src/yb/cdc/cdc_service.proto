@@ -67,6 +67,8 @@ service CDCService {
   rpc IsBootstrapRequired (IsBootstrapRequiredRequestPB) returns (IsBootstrapRequiredResponsePB);
   rpc CheckReplicationDrain (CheckReplicationDrainRequestPB)
       returns (CheckReplicationDrainResponsePB);
+  rpc InitVirtualWALForCDC(InitVirtualWALForCDCRequestPB) returns (InitVirtualWALForCDCResponsePB);
+  rpc GetConsistentChanges(GetConsistentChangesRequestPB) returns (GetConsistentChangesResponsePB);
 }
 
 message CDCErrorPB {
@@ -150,6 +152,30 @@ enum CDCCheckpointType {
   IMPLICIT = 1; // Used for 2DC and CDC
   EXPLICIT = 2; // Used for CDC
 }
+
+message InitVirtualWALForCDCRequestPB {
+  optional uint64 session_id = 1;
+  optional string stream_id = 2;
+  repeated string table_id = 3;  
+}
+
+message InitVirtualWALForCDCResponsePB {
+  optional CDCErrorPB error = 1;
+}
+
+message GetConsistentChangesRequestPB {
+  optional bytes stream_id = 1;
+}
+
+message GetConsistentChangesResponsePB {
+  optional CDCErrorPB error = 1;
+  // optional CDCRecordType record_type = 2 [default = CHANGE];
+  // optional CDCRecordFormat record_format = 3;
+
+  // repeated CDCSDKRecordPB cdc_sdk_records = 7;
+  repeated CDCSDKProtoRecordPB cdc_sdk_proto_records = 2;
+}
+
 
 message CreateCDCStreamRequestPB {
   // Table to set up CDC on.
@@ -418,6 +444,7 @@ message RowMessage {
   // truncate info
   optional yb.tserver.TruncateRequestPB truncate_request_info = 13;
   optional uint64 record_time = 14;
+  optional uint64 lsn = 15;
 }
 
 message CDCSDKProtoRecordPB {

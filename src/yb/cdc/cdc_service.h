@@ -38,6 +38,7 @@
 #include "yb/util/semaphore.h"
 
 #include <boost/optional.hpp>
+#include <queue>
 
 namespace rocksdb {
 
@@ -84,6 +85,7 @@ static const char* const kCheckpointType = "checkpoint_type";
 static const char* const kStreamState = "state";
 static const char* const kNamespaceId = "NAMESPACEID";
 static const char* const kCDCSDKSnapshotDoneKey = "snapshot_done_key";
+static const int32_t kAssembledWALBufferMaxSize = 250;
 struct TabletCheckpoint {
   OpId op_id;
   // Timestamp at which the op ID was last updated.
@@ -104,6 +106,66 @@ struct TabletCDCCheckpointInfo {
   MonoDelta cdc_sdk_op_id_expiration = MonoDelta::kZero;
   int64_t cdc_sdk_latest_active_time = 0;
   HybridTime cdc_sdk_safe_time = HybridTime::kInvalid;
+};
+
+struct TabletCDCSDKCheckpointInfo {
+  OpId from_op_id;
+  std::string key;
+  int32_t write_id;
+  uint64_t snapshot_time;
+  int64_t safe_hybrid_time;
+  int32_t wal_segment_index;
+};
+
+using TabletIdRecordPair = std::pair<TabletId, CDCSDKProtoRecordPB>;
+
+struct CompareCDCSDKProtoRecords {
+  bool operator()(const TabletIdRecordPair& lhs, const TabletIdRecordPair& rhs) const {
+    uint64_t lhs_ct = lhs.second.row_message().commit_time();
+    uint64_t rhs_ct = rhs.second.row_message().commit_time();
+    uint64_t lhs_rt;
+    uint64_t rhs_rt;
+    uint32_t lhs_w_id;
+    uint32_t rhs_w_id;
+
+    bool is_lhs_begin = lhs.second.row_message().op() == cdc::RowMessage::Op::RowMessage_Op_BEGIN;
+    bool is_rhs_begin = rhs.second.row_message().op() == cdc::RowMessage::Op::RowMessage_Op_BEGIN;
+    bool is_lhs_commit = lhs.second.row_message().op() == cdc::RowMessage::Op::RowMessage_Op_COMMIT;
+    bool is_rhs_commit = rhs.second.row_message().op() == cdc::RowMessage::Op::RowMessage_Op_COMMIT;
+
+    bool is_lhs_begin_or_commit = is_lhs_begin || is_lhs_commit;
+    bool is_rhs_begin_or_commit = is_rhs_begin || is_rhs_commit;
+
+    if (!is_lhs_begin && !is_lhs_commit) {
+      lhs_rt = lhs.second.row_message().record_time();
+      lhs_w_id = lhs.second.cdc_sdk_op_id().write_id();
+    }
+
+    if (!is_rhs_begin && !is_rhs_commit) {
+      rhs_rt = rhs.second.row_message().record_time();
+      rhs_w_id = rhs.second.cdc_sdk_op_id().write_id();
+    }
+
+    if (lhs_ct > rhs_ct) {
+      return true;
+    } else if (lhs_ct == rhs_ct) {
+      if ((is_lhs_begin && !is_rhs_begin) || (!is_lhs_commit && is_rhs_commit)) {
+        return false;
+      } else if ((is_lhs_commit && !is_rhs_commit) || (!is_lhs_begin && is_rhs_begin)) {
+        return true;
+      } else if (!is_lhs_begin_or_commit && !is_rhs_begin_or_commit) {
+        if (lhs_rt > rhs_rt) {
+          return true;
+        } else if (lhs_rt == rhs_rt && lhs_w_id > rhs_w_id) {
+          return true;
+        } else if (lhs_rt == rhs_rt && lhs_w_id == rhs_w_id) {
+          return true;
+        }
+      }
+    }
+
+    return false;
+  }
 };
 
 using TabletIdCDCCheckpointMap = std::unordered_map<TabletId, TabletCDCCheckpointInfo>;
@@ -139,6 +201,43 @@ class CDCServiceImpl : public CDCServiceIf {
       const GetCheckpointRequestPB* req,
       GetCheckpointResponsePB* resp,
       rpc::RpcContext rpc) override;
+
+  // New Consumption RPCs
+  void InitVirtualWALForCDC(
+      const InitVirtualWALForCDCRequestPB* req, InitVirtualWALForCDCResponsePB* resp,
+      rpc::RpcContext context) override;
+
+  void GetConsistentChanges(
+      const GetConsistentChangesRequestPB* req, GetConsistentChangesResponsePB* resp,
+      rpc::RpcContext context) override;
+
+  Status InitVirtualWAL(
+      const std::string& stream_id, std::unordered_set<TableId>& table_list, HostPort hostport,
+      CoarseTimePoint deadline);
+
+  Status GetTabletListAndCheckpoint(
+      const std::string& stream_id, const TableId& table_id, HostPort hostport,
+      CoarseTimePoint deadline);
+
+  Status GetConsistentChangesInternal(
+      const std::string& stream_id, HostPort hostport, CoarseTimePoint deadline);
+
+  Status GetChangesInternal(
+      const std::string& stream_id, std::unordered_set<TabletId>& tablet_to_poll_list,
+      HostPort hostport, CoarseTimePoint deadline);
+
+  Result<CDCSDKProtoRecordPB> FindConsistentRecord(
+      const std::string& stream_id,
+      std::priority_queue<
+          TabletIdRecordPair, std::vector<TabletIdRecordPair>, CompareCDCSDKProtoRecords>*
+          sorted_records,
+      HostPort hostport, CoarseTimePoint deadline);
+
+  Result<uint64_t> GetStreamSafeTime();
+
+  void AddEntriesToQueue(std::priority_queue<
+                         TabletIdRecordPair, std::vector<TabletIdRecordPair>,
+                         CompareCDCSDKProtoRecords>* sorted_records);
 
   Result<TabletCheckpoint> TEST_GetTabletInfoFromCache(const TabletStreamInfo& producer_tablet);
 
@@ -345,6 +444,8 @@ class CDCServiceImpl : public CDCServiceIf {
 
   std::shared_ptr<CDCServiceProxy> GetCDCServiceProxy(client::internal::RemoteTabletServer* ts);
 
+  std::shared_ptr<CDCServiceProxy> GetCDCServiceProxy(HostPort hostport);
+
   OpId GetMinSentCheckpointForTablet(const std::string& tablet_id);
 
   std::shared_ptr<MemTracker> GetMemTracker(
@@ -515,6 +616,17 @@ class CDCServiceImpl : public CDCServiceIf {
   std::unordered_set<std::string> paused_xcluster_producer_streams_ GUARDED_BY(mutex_);
 
   uint32_t xcluster_config_version_ GUARDED_BY(mutex_) = 0;
+
+  // Variables for Consumption
+  std::unordered_set<TableId> publication_table_list_;
+  std::unordered_set<TabletId> tablet_list_to_poll_;
+  std::unordered_map<TabletId, TabletCDCSDKCheckpointInfo> tablet_checkpoint_map_;
+  std::unordered_map<TabletId, std::vector<CDCSDKProtoRecordPB>> tablet_queues_;
+  // Stores record's commit_time.
+  // TODO: Find out what is response checkpoint's safetime equal to when we receive non-empty
+  // getchanges response
+  std::unordered_map<TabletId, uint64_t> tablet_safe_time_;
+  std::vector<CDCSDKProtoRecordPB> assembled_virtual_wal_;
 };
 
 }  // namespace cdc
