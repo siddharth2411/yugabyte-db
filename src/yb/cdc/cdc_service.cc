@@ -22,6 +22,7 @@
 #include <boost/multi_index/mem_fun.hpp>
 #include <boost/multi_index/member.hpp>
 #include <boost/multi_index_container.hpp>
+#include <queue>
 
 #include "yb/cdc/cdc_error.h"
 #include "yb/cdc/cdc_producer.h"
@@ -84,6 +85,8 @@
 #include "yb/util/stol_utils.h"
 #include "yb/util/stopwatch.h"
 #include "yb/util/sync_point.h"
+#include "yb/util/test_macros.h"
+#include "yb/util/test_macros.h"
 #include "yb/util/thread.h"
 #include "yb/util/trace.h"
 
@@ -1503,7 +1506,7 @@ void CDCServiceImpl::GetChanges(
   if (!CheckOnline(req, resp, &context)) {
     return;
   }
-  YB_LOG_EVERY_N_SECS(INFO, 300) << "Received GetChanges request " << req->ShortDebugString();
+  LOG(INFO) << "Received GetChanges request " << req->ShortDebugString();
 
   RPC_CHECK_AND_RETURN_ERROR(
       req->has_tablet_id(),
@@ -2998,6 +3001,31 @@ std::shared_ptr<CDCServiceProxy> CDCServiceImpl::GetCDCServiceProxy(RemoteTablet
   return cdc_service;
 }
 
+std::shared_ptr<CDCServiceProxy> CDCServiceImpl::GetCDCServiceProxy(HostPort hostport) {
+  // auto hostport = HostPortFromPB(ts->DesiredHostPort(client()->cloud_info()));
+  DCHECK(!hostport.host().empty());
+
+  {
+    SharedLock<decltype(mutex_)> l(mutex_);
+    auto it = cdc_service_map_.find(hostport);
+    if (it != cdc_service_map_.end()) {
+      return it->second;
+    }
+  }
+
+  auto cdc_service = std::make_shared<CDCServiceProxy>(&client()->proxy_cache(), hostport);
+
+  {
+    std::lock_guard l(mutex_);
+    auto it = cdc_service_map_.find(hostport);
+    if (it != cdc_service_map_.end()) {
+      return it->second;
+    }
+    cdc_service_map_.emplace(hostport, cdc_service);
+  }
+  return cdc_service;
+}
+
 void CDCServiceImpl::TabletLeaderGetChanges(
     const GetChangesRequestPB* req,
     GetChangesResponsePB* resp,
@@ -4230,6 +4258,327 @@ bool CDCServiceImpl::ValidateAutoFlagsConfigVersion(
 
 Result<tablet::TabletPeerPtr> CDCServiceImpl::GetServingTablet(const TabletId& tablet_id) const {
   return context_->GetServingTablet(tablet_id);
+}
+
+void CDCServiceImpl::InitVirtualWALForCDC(
+    const InitVirtualWALForCDCRequestPB* req, InitVirtualWALForCDCResponsePB* resp,
+    rpc::RpcContext context) {
+  if (!CheckOnline(req, resp, &context)) {
+    return;
+  }
+
+  RPC_CHECK_AND_RETURN_ERROR(
+      req->has_session_id(),
+      STATUS(InvalidArgument, "Session ID is required to initialise VirtualWAL"),
+      resp->mutable_error(), CDCErrorPB::INVALID_REQUEST, context);
+
+  RPC_CHECK_AND_RETURN_ERROR(
+      req->has_stream_id(),
+      STATUS(InvalidArgument, "Stream ID is required to initialise VirtualWAL"),
+      resp->mutable_error(), CDCErrorPB::INVALID_REQUEST, context);
+
+  LOG(INFO) << "InitVirtualWALForCDC:Here";
+  auto stream_id = req->stream_id();
+  std::unordered_set<TableId> table_list;
+  for (const auto& table_id : req->table_id()) {
+    table_list.insert(table_id);
+  }
+  LOG(INFO) << "InitVirtualWALForCDC:Here";
+
+  // auto context_ptr = std::make_shared<RpcContext>(std::move(context));
+  LOG(INFO) << "InitVirtualWALForCDC:Here";
+  HostPort hostport(context.local_address());
+  Status s = InitVirtualWAL(stream_id, table_list, hostport, GetDeadline(context, client()));
+  LOG(INFO) << "InitVirtualWALForCDC:Here";
+  if (!s.ok()) {
+    LOG(WARNING) << "VirtualWAL init failed for stream_id: " << stream_id;
+    CDCError error(s);
+    SetupErrorAndRespond(resp->mutable_error(), s, error.value(), &context);
+    return;
+  }
+  LOG(INFO) << "InitVirtualWALForCDC:Here";
+  context.RespondSuccess();
+}
+
+Status CDCServiceImpl::InitVirtualWAL(
+    const std::string& stream_id, std::unordered_set<TableId>& table_list, HostPort hostport,
+    CoarseTimePoint deadline) {
+  LOG(INFO) << "InitVirtualWAL:Here";
+  for (const auto& table_id : table_list) {
+    publication_table_list_.insert(table_id);
+    LOG(INFO) << "InitVirtualWAL:Here";
+    Status s = GetTabletListAndCheckpoint(stream_id, table_id, hostport, deadline);
+    LOG(INFO) << "InitVirtualWAL:Here";
+    if (!s.ok()) {
+      LOG(ERROR) << "Error fetching tablet list for table_id: " << table_id;
+      return s;
+    }
+    LOG(INFO) << "InitVirtualWAL:Here";
+  }
+  LOG(INFO) << "InitVirtualWAL:Here";
+  return Status::OK();
+}
+
+Status CDCServiceImpl::GetTabletListAndCheckpoint(
+    const std::string& stream_id, const TableId& table_id, HostPort hostport,
+    CoarseTimePoint deadline) {
+  LOG(INFO) << "GetTabletListAndCheckpoint:Here";
+  GetTabletListToPollForCDCRequestPB req;
+  GetTabletListToPollForCDCResponsePB resp;
+  auto table_info = req.mutable_table_info();
+  table_info->set_stream_id(stream_id);
+  table_info->set_table_id(table_id);
+  LOG(INFO) << "GetTabletListAndCheckpoint:Here";
+  // TODO: Change this RPC call to a local call
+  auto cdc_proxy = GetCDCServiceProxy(hostport);
+  rpc::RpcController rpc;
+  rpc.set_deadline(deadline);
+  RETURN_NOT_OK(cdc_proxy->GetTabletListToPollForCDC(req, &resp, &rpc));
+  LOG(INFO) << "GetTabletListAndCheckpoint:Here";
+  if (resp.has_error()) {
+    return StatusFromPB(resp.error().status());
+  }
+
+  LOG(INFO) << "GetTabletListAndCheckpoint:Here";
+  for (const auto& tablet_checkpoint_pair : resp.tablet_checkpoint_pairs()) {
+    auto tablet_id = tablet_checkpoint_pair.tablet_locations().tablet_id();
+    LOG(INFO) << "Sid: TabletID: " << tablet_id;
+    auto checkpoint = tablet_checkpoint_pair.cdc_sdk_checkpoint();
+    if (tablet_checkpoint_map_.find(tablet_id) == tablet_checkpoint_map_.end()) {
+      TabletCDCSDKCheckpointInfo info;
+      // OpId opid(checkpoint.term(), checkpoint.index());
+      info.from_op_id = OpId::FromPB(checkpoint);
+      info.key = checkpoint.key();
+      info.write_id = checkpoint.write_id();
+      info.snapshot_time = checkpoint.snapshot_time();
+      info.safe_hybrid_time = -1;
+      info.wal_segment_index = 0;
+      tablet_checkpoint_map_[tablet_id] = info;
+    }
+
+    // create tablet queue for this tablet
+    if (tablet_queues_.find(tablet_id) == tablet_queues_.end()) {
+      // assigning empty vector
+      tablet_queues_[tablet_id] = std::vector<CDCSDKProtoRecordPB>();
+    }
+  }
+
+  return Status::OK();
+}
+
+void CDCServiceImpl::GetConsistentChanges(
+    const GetConsistentChangesRequestPB* req, GetConsistentChangesResponsePB* resp,
+    RpcContext context) {
+  if (!CheckOnline(req, resp, &context)) {
+    return;
+  }
+
+  RPC_CHECK_AND_RETURN_ERROR(
+      req->has_stream_id(), STATUS(InvalidArgument, "Stream ID is required for GetChanges"),
+      resp->mutable_error(), CDCErrorPB::INVALID_REQUEST, context);
+
+  auto stream_id = req->stream_id();
+  HostPort hostport(context.local_address());
+  Status s = GetConsistentChangesInternal(stream_id, hostport, GetDeadline(context, client()));
+  if (!s.ok()) {
+    LOG(WARNING) << "GetChanges failed";
+    CDCError error(s);
+    SetupErrorAndRespond(resp->mutable_error(), s, error.value(), &context);
+    return;
+  }
+
+  if (assembled_virtual_wal_.size() > 0) {
+    LOG(INFO) << "assembled_virtual_wal_.size(): " << assembled_virtual_wal_.size();
+    for (const auto& record : assembled_virtual_wal_) {
+      auto records = resp->add_cdc_sdk_proto_records();
+      records->CopyFrom(record);
+    }
+    assembled_virtual_wal_.clear();
+    LOG(INFO) << "GetConsistentChangesResponsePB record size: "
+              << resp->cdc_sdk_proto_records_size();
+  }
+  context.RespondSuccess();
+}
+
+void PrintPQContents(std::priority_queue<
+                     TabletIdRecordPair, std::vector<TabletIdRecordPair>, CompareCDCSDKProtoRecords>
+                         sorted_records) {
+  LOG(INFO) << "printing contents of PQ";
+  while (!sorted_records.empty()) {
+    LOG(INFO) << "Tablet_id: " << sorted_records.top().first
+              << " Record: " << sorted_records.top().second.DebugString();
+    sorted_records.pop();
+  }
+}
+
+Status CDCServiceImpl::GetConsistentChangesInternal(
+    const std::string& stream_id, HostPort hostport, CoarseTimePoint deadline) {
+  std::unordered_set<TabletId> tablet_to_poll_list;
+  // TODO: Might require Read lock on tablet queues.
+  for (const auto& tablet_queue : tablet_queues_) {
+    auto tablet_id = tablet_queue.first;
+    auto records_queue = tablet_queue.second;
+
+    if (records_queue.empty()) {
+      tablet_to_poll_list.insert(tablet_id);
+    }
+  }
+  if (!tablet_to_poll_list.empty()) {
+    Status s = GetChangesInternal(stream_id, tablet_to_poll_list, hostport, deadline);
+    if (!s.ok()) {
+      LOG(ERROR) << "Error calling GetChanges on tablets for stream_id: " << stream_id;
+      return s;
+    }
+  }
+
+  std::priority_queue<
+      TabletIdRecordPair, std::vector<TabletIdRecordPair>, CompareCDCSDKProtoRecords>
+      sorted_records;
+  AddEntriesToQueue(&sorted_records);
+
+  while (assembled_virtual_wal_.size() < kAssembledWALBufferMaxSize && !sorted_records.empty()) {
+    assembled_virtual_wal_.push_back(
+        VERIFY_RESULT(FindConsistentRecord(stream_id, &sorted_records, hostport, deadline)));
+    LOG(INFO) << "assembled_virtual_wal_.size(): " << assembled_virtual_wal_.size();
+  }
+  // TODO: Assign LSN & TxnID
+
+  return Status::OK();
+}
+
+Status CDCServiceImpl::GetChangesInternal(
+    const std::string& stream_id, std::unordered_set<TabletId>& tablet_to_poll_list,
+    HostPort hostport, CoarseTimePoint deadline) {
+  for (const auto& tablet_id : tablet_to_poll_list) {
+    GetChangesRequestPB req;
+    GetChangesResponsePB resp;
+
+    const TabletCDCSDKCheckpointInfo info = tablet_checkpoint_map_[tablet_id];
+    LOG(INFO) << "Got Checkpointinfo";
+    req.set_stream_id(stream_id);
+    req.set_tablet_id(tablet_id);
+    req.set_cdcsdk_request_source(cdc::CDCSDKRequestSource::WALSENDER);
+    req.set_safe_hybrid_time(info.safe_hybrid_time);
+    req.set_wal_segment_index(info.wal_segment_index);
+
+    auto req_checkpoint = req.mutable_from_cdc_sdk_checkpoint();
+    req_checkpoint->set_term(info.from_op_id.term);
+    req_checkpoint->set_index(info.from_op_id.index);
+    req_checkpoint->set_key(info.key);
+    req_checkpoint->set_write_id(info.write_id);
+    req_checkpoint->set_snapshot_time(info.snapshot_time);
+    LOG(INFO) << "Formed req";
+    // TODO: Change this RPC call to a local call
+    auto cdc_proxy = GetCDCServiceProxy(hostport);
+    LOG(INFO) << "Got CDC proxy";
+    rpc::RpcController rpc;
+    rpc.set_deadline(deadline);
+    LOG(INFO) << "Set RPC deadline";
+    RETURN_NOT_OK(cdc_proxy->GetChanges(req, &resp, &rpc));
+    if (resp.has_error()) {
+      return StatusFromPB(resp.error().status());
+    }
+
+    // TODO: Might require write_lock.
+    LOG(INFO) << "Polled on TabletId: " << tablet_id;
+    LOG(INFO) << "GetChanges resp size: " << resp.cdc_sdk_proto_records_size();
+    LOG(INFO) << "GetChanges resp: " << resp.DebugString();
+    vector<CDCSDKProtoRecordPB>* tablet_queue = &tablet_queues_[tablet_id];
+    LOG(INFO) << "Tablet queue size: " << tablet_queue->size();
+    if (resp.cdc_sdk_proto_records_size() > 0) {
+      for (const auto& record : resp.cdc_sdk_proto_records()) {
+        // LOG(INFO) << "Inserting Record: " << record.DebugString();
+        // Assumes that tablet level ordering is maintained in the GetChanges response. Hence,
+        // skipping comparing commit_time of records.
+        tablet_queue->push_back(record);
+        if (tablet_safe_time_.find(tablet_id) == tablet_safe_time_.end()) {
+          tablet_safe_time_[tablet_id] = record.row_message().commit_time();
+        } else if (tablet_safe_time_[tablet_id] < record.row_message().commit_time()) {
+          tablet_safe_time_[tablet_id] = record.row_message().commit_time();
+        }
+      }
+    }
+    LOG(INFO) << "Tablet queue size after insertion: " << tablet_queue->size();
+    // Update tablet's checkpoint info
+    TabletCDCSDKCheckpointInfo tablet_checkpoint_info;
+    tablet_checkpoint_info.from_op_id = OpId::FromPB(resp.cdc_sdk_checkpoint());
+    tablet_checkpoint_info.key = resp.cdc_sdk_checkpoint().key();
+    tablet_checkpoint_info.write_id = resp.cdc_sdk_checkpoint().write_id();
+    tablet_checkpoint_info.snapshot_time = resp.cdc_sdk_checkpoint().snapshot_time();
+    tablet_checkpoint_info.safe_hybrid_time = resp.safe_hybrid_time();
+    tablet_checkpoint_info.wal_segment_index = resp.wal_segment_index();
+    tablet_checkpoint_map_[tablet_id] = tablet_checkpoint_info;
+  }
+
+  return Status::OK();
+}
+
+void CDCServiceImpl::AddEntriesToQueue(std::priority_queue<
+                                       TabletIdRecordPair, std::vector<TabletIdRecordPair>,
+                                       CompareCDCSDKProtoRecords>* sorted_records) {
+  for (auto& tablet_queue : tablet_queues_) {
+    // if (tablet_queue.second.begin()->row_message().op() ==
+    //       cdc::RowMessage::Op::RowMessage_Op_SAFEPOINT) {
+    //     tablet_queue.second.erase(tablet_queue.second.begin());
+    // }
+    if (!tablet_queue.second.empty()) {
+      LOG(INFO) << "Tablet_Id: " << tablet_queue.first
+                << "Tablet_queue.front(): " << (tablet_queue.second.front().DebugString());
+      sorted_records->push({tablet_queue.first, tablet_queue.second.front()});
+      // tablet_queue.second.erase(tablet_queue.second.begin());
+      LOG(INFO) << "After erasing front record Tablet_Id: " << tablet_queue.first
+                << "Tablet_queue.front(): " << (tablet_queue.second.front().DebugString());
+    }
+  }
+  LOG(INFO) << "After adding entries in PQ";
+  PrintPQContents(*sorted_records);
+}
+
+Result<CDCSDKProtoRecordPB> CDCServiceImpl::FindConsistentRecord(
+    const std::string& stream_id,
+    std::priority_queue<
+        TabletIdRecordPair, std::vector<TabletIdRecordPair>, CompareCDCSDKProtoRecords>*
+        sorted_records,
+    HostPort hostport, CoarseTimePoint deadline) {
+  uint64_t stream_safe_time = VERIFY_RESULT(GetStreamSafeTime());
+  LOG(INFO) << "Inside FindConsistentRecord";
+  PrintPQContents(*sorted_records);
+  const auto record = sorted_records->top();
+  // Remove the record from the tablet queue.
+  tablet_queues_[record.first].erase(tablet_queues_[record.first].begin());
+  LOG(INFO) << "Top Record in PQ: tablet_id: " << record.first
+            << " record: " << record.second.DebugString();
+  if (record.second.row_message().commit_time() <= stream_safe_time) {
+    auto tablet_id = record.first;
+    // CheckNextRecordInTabletQueue(stream_id, tablet_id, sorted_records);
+    if (tablet_queues_[tablet_id].empty()) {
+      LOG(INFO) << "Did it error here";
+      std::unordered_set<TabletId> tablet_to_poll_list;
+      tablet_to_poll_list.insert(tablet_id);
+      RETURN_NOT_OK(GetChangesInternal(stream_id, tablet_to_poll_list, hostport, deadline));
+      LOG(INFO) << "GetChanges succesfull";
+    }
+    sorted_records->pop();
+    LOG(INFO) << "Popped from PQ succesfull";
+
+    // Add next record from the tablet queue if available
+    if (!tablet_queues_[tablet_id].empty()) {
+      sorted_records->push({tablet_id, tablet_queues_[tablet_id].front()});
+      // tablet_queues_[tablet_id].erase(tablet_queues_[tablet_id].begin());
+    }
+  }
+
+  // TODO: Ideally record should be return from inside the above if block. At this point, find out
+  // what the connector does.
+  return record.second;
+}
+
+Result<uint64_t> CDCServiceImpl::GetStreamSafeTime() {
+  uint64_t stream_safe_time = std::numeric_limits<uint64_t>::max();
+  for (const auto& safe_time : tablet_safe_time_) {
+    stream_safe_time = std::min(stream_safe_time, safe_time.second);
+  }
+  return stream_safe_time;
 }
 
 }  // namespace cdc
