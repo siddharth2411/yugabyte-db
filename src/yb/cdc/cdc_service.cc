@@ -4284,11 +4284,8 @@ void CDCServiceImpl::InitVirtualWALForCDC(
     table_list.insert(table_id);
   }
   LOG(INFO) << "InitVirtualWALForCDC:Here";
-
-  // auto context_ptr = std::make_shared<RpcContext>(std::move(context));
-  LOG(INFO) << "InitVirtualWALForCDC:Here";
   HostPort hostport(context.local_address());
-  Status s = InitVirtualWAL(stream_id, table_list, hostport, GetDeadline(context, client()));
+  Status s = InitVirtualWALInternal(stream_id, table_list, hostport, GetDeadline(context, client()));
   LOG(INFO) << "InitVirtualWALForCDC:Here";
   if (!s.ok()) {
     LOG(WARNING) << "VirtualWAL init failed for stream_id: " << stream_id;
@@ -4300,7 +4297,7 @@ void CDCServiceImpl::InitVirtualWALForCDC(
   context.RespondSuccess();
 }
 
-Status CDCServiceImpl::InitVirtualWAL(
+Status CDCServiceImpl::InitVirtualWALInternal(
     const std::string& stream_id, std::unordered_set<TableId>& table_list, HostPort hostport,
     CoarseTimePoint deadline) {
   LOG(INFO) << "InitVirtualWAL:Here";
@@ -4346,7 +4343,6 @@ Status CDCServiceImpl::GetTabletListAndCheckpoint(
     auto checkpoint = tablet_checkpoint_pair.cdc_sdk_checkpoint();
     if (tablet_checkpoint_map_.find(tablet_id) == tablet_checkpoint_map_.end()) {
       TabletCDCSDKCheckpointInfo info;
-      // OpId opid(checkpoint.term(), checkpoint.index());
       info.from_op_id = OpId::FromPB(checkpoint);
       info.key = checkpoint.key();
       info.write_id = checkpoint.write_id();
@@ -4354,11 +4350,11 @@ Status CDCServiceImpl::GetTabletListAndCheckpoint(
       info.safe_hybrid_time = -1;
       info.wal_segment_index = 0;
       tablet_checkpoint_map_[tablet_id] = info;
+      LOG(INFO) <<"Adding tablet queue for tablet_id: " <<tablet_id << " cdc_sdk_checkpt: " << checkpoint.DebugString();
     }
 
     // create tablet queue for this tablet
     if (tablet_queues_.find(tablet_id) == tablet_queues_.end()) {
-      // assigning empty vector
       tablet_queues_[tablet_id] = std::vector<CDCSDKProtoRecordPB>();
     }
   }
@@ -4379,24 +4375,15 @@ void CDCServiceImpl::GetConsistentChanges(
 
   auto stream_id = req->stream_id();
   HostPort hostport(context.local_address());
-  Status s = GetConsistentChangesInternal(stream_id, hostport, GetDeadline(context, client()));
+  Status s =
+      GetConsistentChangesInternal(stream_id, resp, hostport, GetDeadline(context, client()));
   if (!s.ok()) {
     LOG(WARNING) << "GetChanges failed";
     CDCError error(s);
     SetupErrorAndRespond(resp->mutable_error(), s, error.value(), &context);
     return;
   }
-
-  if (assembled_virtual_wal_.size() > 0) {
-    LOG(INFO) << "assembled_virtual_wal_.size(): " << assembled_virtual_wal_.size();
-    for (const auto& record : assembled_virtual_wal_) {
-      auto records = resp->add_cdc_sdk_proto_records();
-      records->CopyFrom(record);
-    }
-    assembled_virtual_wal_.clear();
-    LOG(INFO) << "GetConsistentChangesResponsePB record size: "
-              << resp->cdc_sdk_proto_records_size();
-  }
+  LOG(INFO) << "GetConsistentChangesResponsePB record size: " << resp->cdc_sdk_proto_records_size();
   context.RespondSuccess();
 }
 
@@ -4412,7 +4399,8 @@ void PrintPQContents(std::priority_queue<
 }
 
 Status CDCServiceImpl::GetConsistentChangesInternal(
-    const std::string& stream_id, HostPort hostport, CoarseTimePoint deadline) {
+    const std::string& stream_id, GetConsistentChangesResponsePB* resp, HostPort hostport,
+    CoarseTimePoint deadline) {
   std::unordered_set<TabletId> tablet_to_poll_list;
   // TODO: Might require Read lock on tablet queues.
   for (const auto& tablet_queue : tablet_queues_) {
@@ -4434,12 +4422,20 @@ Status CDCServiceImpl::GetConsistentChangesInternal(
   std::priority_queue<
       TabletIdRecordPair, std::vector<TabletIdRecordPair>, CompareCDCSDKProtoRecords>
       sorted_records;
+  std::vector<TabletId> empty_tablet_queues;
   AddEntriesToQueue(&sorted_records);
 
-  while (assembled_virtual_wal_.size() < kAssembledWALBufferMaxSize && !sorted_records.empty()) {
-    assembled_virtual_wal_.push_back(
-        VERIFY_RESULT(FindConsistentRecord(stream_id, &sorted_records, hostport, deadline)));
-    LOG(INFO) << "assembled_virtual_wal_.size(): " << assembled_virtual_wal_.size();
+  while (resp->cdc_sdk_proto_records_size() < kAssembledWALBufferMaxSize &&
+         !sorted_records.empty() && empty_tablet_queues.size() == 0) {
+    auto next_record = VERIFY_RESULT(
+        FindConsistentRecord(stream_id, &sorted_records, &empty_tablet_queues, hostport, deadline));
+    if (next_record.row_message().op() == RowMessage_Op_SAFEPOINT) {
+      LOG(INFO) << "Skipped safepoint record";
+      continue;
+    }
+    auto records = resp->add_cdc_sdk_proto_records();
+    records->CopyFrom(next_record);
+    LOG(INFO) << "assembled_virtual_wal_.size(): " << resp->cdc_sdk_proto_records_size();
   }
   // TODO: Assign LSN & TxnID
 
@@ -4473,7 +4469,6 @@ Status CDCServiceImpl::GetChangesInternal(
     LOG(INFO) << "Got CDC proxy";
     rpc::RpcController rpc;
     rpc.set_deadline(deadline);
-    LOG(INFO) << "Set RPC deadline";
     RETURN_NOT_OK(cdc_proxy->GetChanges(req, &resp, &rpc));
     if (resp.has_error()) {
       return StatusFromPB(resp.error().status());
@@ -4487,15 +4482,9 @@ Status CDCServiceImpl::GetChangesInternal(
     LOG(INFO) << "Tablet queue size: " << tablet_queue->size();
     if (resp.cdc_sdk_proto_records_size() > 0) {
       for (const auto& record : resp.cdc_sdk_proto_records()) {
-        // LOG(INFO) << "Inserting Record: " << record.DebugString();
         // Assumes that tablet level ordering is maintained in the GetChanges response. Hence,
         // skipping comparing commit_time of records.
         tablet_queue->push_back(record);
-        if (tablet_safe_time_.find(tablet_id) == tablet_safe_time_.end()) {
-          tablet_safe_time_[tablet_id] = record.row_message().commit_time();
-        } else if (tablet_safe_time_[tablet_id] < record.row_message().commit_time()) {
-          tablet_safe_time_[tablet_id] = record.row_message().commit_time();
-        }
       }
     }
     LOG(INFO) << "Tablet queue size after insertion: " << tablet_queue->size();
@@ -4517,21 +4506,11 @@ void CDCServiceImpl::AddEntriesToQueue(std::priority_queue<
                                        TabletIdRecordPair, std::vector<TabletIdRecordPair>,
                                        CompareCDCSDKProtoRecords>* sorted_records) {
   for (auto& tablet_queue : tablet_queues_) {
-    // if (tablet_queue.second.begin()->row_message().op() ==
-    //       cdc::RowMessage::Op::RowMessage_Op_SAFEPOINT) {
-    //     tablet_queue.second.erase(tablet_queue.second.begin());
-    // }
     if (!tablet_queue.second.empty()) {
-      LOG(INFO) << "Tablet_Id: " << tablet_queue.first
-                << "Tablet_queue.front(): " << (tablet_queue.second.front().DebugString());
       sorted_records->push({tablet_queue.first, tablet_queue.second.front()});
-      // tablet_queue.second.erase(tablet_queue.second.begin());
-      LOG(INFO) << "After erasing front record Tablet_Id: " << tablet_queue.first
-                << "Tablet_queue.front(): " << (tablet_queue.second.front().DebugString());
     }
   }
   LOG(INFO) << "After adding entries in PQ";
-  PrintPQContents(*sorted_records);
 }
 
 Result<CDCSDKProtoRecordPB> CDCServiceImpl::FindConsistentRecord(
@@ -4539,46 +4518,23 @@ Result<CDCSDKProtoRecordPB> CDCServiceImpl::FindConsistentRecord(
     std::priority_queue<
         TabletIdRecordPair, std::vector<TabletIdRecordPair>, CompareCDCSDKProtoRecords>*
         sorted_records,
-    HostPort hostport, CoarseTimePoint deadline) {
-  uint64_t stream_safe_time = VERIFY_RESULT(GetStreamSafeTime());
+    std::vector<TabletId>* empty_tablet_queues, HostPort hostport, CoarseTimePoint deadline) {
   LOG(INFO) << "Inside FindConsistentRecord";
-  PrintPQContents(*sorted_records);
+  // PrintPQContents(*sorted_records);
   const auto record = sorted_records->top();
-  // Remove the record from the tablet queue.
+  auto tablet_id = record.first;
+  sorted_records->pop();
+  LOG(INFO) << "Popped from PQ succesfull";
   tablet_queues_[record.first].erase(tablet_queues_[record.first].begin());
-  LOG(INFO) << "Top Record in PQ: tablet_id: " << record.first
-            << " record: " << record.second.DebugString();
-  if (record.second.row_message().commit_time() <= stream_safe_time) {
-    auto tablet_id = record.first;
-    // CheckNextRecordInTabletQueue(stream_id, tablet_id, sorted_records);
-    if (tablet_queues_[tablet_id].empty()) {
-      LOG(INFO) << "Did it error here";
-      std::unordered_set<TabletId> tablet_to_poll_list;
-      tablet_to_poll_list.insert(tablet_id);
-      RETURN_NOT_OK(GetChangesInternal(stream_id, tablet_to_poll_list, hostport, deadline));
-      LOG(INFO) << "GetChanges succesfull";
-    }
-    sorted_records->pop();
-    LOG(INFO) << "Popped from PQ succesfull";
 
-    // Add next record from the tablet queue if available
-    if (!tablet_queues_[tablet_id].empty()) {
-      sorted_records->push({tablet_id, tablet_queues_[tablet_id].front()});
-      // tablet_queues_[tablet_id].erase(tablet_queues_[tablet_id].begin());
-    }
+  // Add next record from the tablet queue if available
+  if (!tablet_queues_[tablet_id].empty()) {
+    sorted_records->push({tablet_id, tablet_queues_[tablet_id].front()});
+  } else {
+    empty_tablet_queues->push_back(tablet_id);
   }
 
-  // TODO: Ideally record should be return from inside the above if block. At this point, find out
-  // what the connector does.
   return record.second;
-}
-
-Result<uint64_t> CDCServiceImpl::GetStreamSafeTime() {
-  uint64_t stream_safe_time = std::numeric_limits<uint64_t>::max();
-  for (const auto& safe_time : tablet_safe_time_) {
-    stream_safe_time = std::min(stream_safe_time, safe_time.second);
-  }
-  return stream_safe_time;
 }
 
 }  // namespace cdc

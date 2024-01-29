@@ -117,56 +117,73 @@ struct TabletCDCSDKCheckpointInfo {
   int32_t wal_segment_index;
 };
 
+
+
 using TabletIdRecordPair = std::pair<TabletId, CDCSDKProtoRecordPB>;
 
-struct CompareCDCSDKProtoRecords {
-  bool operator()(const TabletIdRecordPair& lhs, const TabletIdRecordPair& rhs) const {
-    uint64_t lhs_ct = lhs.second.row_message().commit_time();
-    uint64_t rhs_ct = rhs.second.row_message().commit_time();
-    uint64_t lhs_rt;
-    uint64_t rhs_rt;
-    uint32_t lhs_w_id;
-    uint32_t rhs_w_id;
-
-    bool is_lhs_begin = lhs.second.row_message().op() == cdc::RowMessage::Op::RowMessage_Op_BEGIN;
-    bool is_rhs_begin = rhs.second.row_message().op() == cdc::RowMessage::Op::RowMessage_Op_BEGIN;
-    bool is_lhs_commit = lhs.second.row_message().op() == cdc::RowMessage::Op::RowMessage_Op_COMMIT;
-    bool is_rhs_commit = rhs.second.row_message().op() == cdc::RowMessage::Op::RowMessage_Op_COMMIT;
-
-    bool is_lhs_begin_or_commit = is_lhs_begin || is_lhs_commit;
-    bool is_rhs_begin_or_commit = is_rhs_begin || is_rhs_commit;
-
-    if (!is_lhs_begin && !is_lhs_commit) {
-      lhs_rt = lhs.second.row_message().record_time();
-      lhs_w_id = lhs.second.cdc_sdk_op_id().write_id();
+class YbUniqueRecordID {
+ public:
+  static YbUniqueRecordID GetYbUniqueRecordID(const TabletIdRecordPair& record) {
+    YbUniqueRecordID record_id;
+    record_id.op = record.second.row_message().op();
+    record_id.commit_time = record.second.row_message().commit_time();
+    if (record_id.op == RowMessage_Op_BEGIN || record_id.op == RowMessage_Op_DDL) {
+      record_id.record_time = 0;
+      record_id.write_id = 0;
+      record_id.tablet_id = "";
+    } else if (record_id.op == RowMessage_Op_COMMIT || record_id.op == RowMessage_Op_SAFEPOINT) {
+      record_id.record_time = std::numeric_limits<uint64_t>::max();
+      record_id.write_id = std::numeric_limits<uint32_t>::max();
+      record_id.tablet_id = "";
+    } else {
+      // Change record
+      record_id.record_time = record.second.row_message().record_time();
+      record_id.write_id = record.second.cdc_sdk_op_id().write_id();
+      record_id.tablet_id = record.first;
     }
 
-    if (!is_rhs_begin && !is_rhs_commit) {
-      rhs_rt = rhs.second.row_message().record_time();
-      rhs_w_id = rhs.second.cdc_sdk_op_id().write_id();
-    }
+    return record_id;
+  }
 
-    if (lhs_ct > rhs_ct) {
+  bool lessThan(const YbUniqueRecordID& record) {
+    if (this->commit_time < record.commit_time) {
       return true;
-    } else if (lhs_ct == rhs_ct) {
-      if ((is_lhs_begin && !is_rhs_begin) || (!is_lhs_commit && is_rhs_commit)) {
-        return false;
-      } else if ((is_lhs_commit && !is_rhs_commit) || (!is_lhs_begin && is_rhs_begin)) {
+    } else if (this->commit_time == record.commit_time) {
+      if (this->record_time < record.record_time) {
         return true;
-      } else if (!is_lhs_begin_or_commit && !is_rhs_begin_or_commit) {
-        if (lhs_rt > rhs_rt) {
+      } else if (this->record_time == record.record_time) {
+        if (this->write_id < record.write_id) {
           return true;
-        } else if (lhs_rt == rhs_rt && lhs_w_id > rhs_w_id) {
-          return true;
-        } else if (lhs_rt == rhs_rt && lhs_w_id == rhs_w_id) {
-          return true;
+        } else if (this->write_id == record.write_id) {
+          return this->tablet_id < record.tablet_id;
+        } else {
+          return false;
         }
+      } else {
+        return false;
       }
     }
 
     return false;
   }
+ private:
+  RowMessage_Op op;
+  uint64_t commit_time;
+  uint64_t record_time;
+  std::string tablet_id;
+  int32_t write_id;
+
 };
+
+struct CompareCDCSDKProtoRecords {
+  bool operator()(const TabletIdRecordPair& lhs, const TabletIdRecordPair& rhs) const {
+    auto lhs_id = YbUniqueRecordID::GetYbUniqueRecordID(lhs);
+    auto rhs_id = YbUniqueRecordID::GetYbUniqueRecordID(rhs);
+
+    return !lhs_id.lessThan(rhs_id);
+  }
+};
+
 
 using TabletIdCDCCheckpointMap = std::unordered_map<TabletId, TabletCDCCheckpointInfo>;
 using TabletIdStreamIdSet = std::set<std::pair<TabletId, xrepl::StreamId>>;
@@ -211,7 +228,7 @@ class CDCServiceImpl : public CDCServiceIf {
       const GetConsistentChangesRequestPB* req, GetConsistentChangesResponsePB* resp,
       rpc::RpcContext context) override;
 
-  Status InitVirtualWAL(
+  Status InitVirtualWALInternal(
       const std::string& stream_id, std::unordered_set<TableId>& table_list, HostPort hostport,
       CoarseTimePoint deadline);
 
@@ -220,7 +237,8 @@ class CDCServiceImpl : public CDCServiceIf {
       CoarseTimePoint deadline);
 
   Status GetConsistentChangesInternal(
-      const std::string& stream_id, HostPort hostport, CoarseTimePoint deadline);
+      const std::string& stream_id, GetConsistentChangesResponsePB* resp, HostPort hostport,
+      CoarseTimePoint deadline);
 
   Status GetChangesInternal(
       const std::string& stream_id, std::unordered_set<TabletId>& tablet_to_poll_list,
@@ -231,9 +249,7 @@ class CDCServiceImpl : public CDCServiceIf {
       std::priority_queue<
           TabletIdRecordPair, std::vector<TabletIdRecordPair>, CompareCDCSDKProtoRecords>*
           sorted_records,
-      HostPort hostport, CoarseTimePoint deadline);
-
-  Result<uint64_t> GetStreamSafeTime();
+      std::vector<TabletId>* empty_tablet_queues, HostPort hostport, CoarseTimePoint deadline);
 
   void AddEntriesToQueue(std::priority_queue<
                          TabletIdRecordPair, std::vector<TabletIdRecordPair>,
@@ -617,16 +633,10 @@ class CDCServiceImpl : public CDCServiceIf {
 
   uint32_t xcluster_config_version_ GUARDED_BY(mutex_) = 0;
 
-  // Variables for Consumption
   std::unordered_set<TableId> publication_table_list_;
   std::unordered_set<TabletId> tablet_list_to_poll_;
   std::unordered_map<TabletId, TabletCDCSDKCheckpointInfo> tablet_checkpoint_map_;
   std::unordered_map<TabletId, std::vector<CDCSDKProtoRecordPB>> tablet_queues_;
-  // Stores record's commit_time.
-  // TODO: Find out what is response checkpoint's safetime equal to when we receive non-empty
-  // getchanges response
-  std::unordered_map<TabletId, uint64_t> tablet_safe_time_;
-  std::vector<CDCSDKProtoRecordPB> assembled_virtual_wal_;
 };
 
 }  // namespace cdc
