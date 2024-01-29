@@ -4285,7 +4285,8 @@ void CDCServiceImpl::InitVirtualWALForCDC(
   }
   LOG(INFO) << "InitVirtualWALForCDC:Here";
   HostPort hostport(context.local_address());
-  Status s = InitVirtualWALInternal(stream_id, table_list, hostport, GetDeadline(context, client()));
+  Status s =
+      InitVirtualWALInternal(stream_id, table_list, hostport, GetDeadline(context, client()));
   LOG(INFO) << "InitVirtualWALForCDC:Here";
   if (!s.ok()) {
     LOG(WARNING) << "VirtualWAL init failed for stream_id: " << stream_id;
@@ -4350,7 +4351,8 @@ Status CDCServiceImpl::GetTabletListAndCheckpoint(
       info.safe_hybrid_time = -1;
       info.wal_segment_index = 0;
       tablet_checkpoint_map_[tablet_id] = info;
-      LOG(INFO) <<"Adding tablet queue for tablet_id: " <<tablet_id << " cdc_sdk_checkpt: " << checkpoint.DebugString();
+      LOG(INFO) << "Adding tablet queue for tablet_id: " << tablet_id
+                << " cdc_sdk_checkpt: " << checkpoint.DebugString();
     }
 
     // create tablet queue for this tablet

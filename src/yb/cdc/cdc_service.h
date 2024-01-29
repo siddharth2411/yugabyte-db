@@ -117,8 +117,6 @@ struct TabletCDCSDKCheckpointInfo {
   int32_t wal_segment_index;
 };
 
-
-
 using TabletIdRecordPair = std::pair<TabletId, CDCSDKProtoRecordPB>;
 
 class YbUniqueRecordID {
@@ -166,13 +164,13 @@ class YbUniqueRecordID {
 
     return false;
   }
+
  private:
   RowMessage_Op op;
   uint64_t commit_time;
   uint64_t record_time;
   std::string tablet_id;
   int32_t write_id;
-
 };
 
 struct CompareCDCSDKProtoRecords {
@@ -183,7 +181,6 @@ struct CompareCDCSDKProtoRecords {
     return !lhs_id.lessThan(rhs_id);
   }
 };
-
 
 using TabletIdCDCCheckpointMap = std::unordered_map<TabletId, TabletCDCCheckpointInfo>;
 using TabletIdStreamIdSet = std::set<std::pair<TabletId, xrepl::StreamId>>;
