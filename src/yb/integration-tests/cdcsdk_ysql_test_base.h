@@ -388,6 +388,10 @@ class CDCSDKYsqlTest : public CDCSDKTestBase {
       const int64 expected_total_records, bool explicit_checkpointing_enabled = false,
       std::map<TabletId, std::vector<CDCSDKProtoRecordPB>> records = {});
 
+  Result<int64> GetChangeRecordCount(
+      const xrepl::StreamId& stream_id, const std::vector<TableId> table_ids,
+      const int64 expected_total_records, bool should_retry);
+
   Result<SetCDCCheckpointResponsePB> SetCDCCheckpoint(
       const xrepl::StreamId& stream_id,
       const google::protobuf::RepeatedPtrField<master::TabletLocationsPB>& tablets,
@@ -471,6 +475,11 @@ class CDCSDKYsqlTest : public CDCSDKTestBase {
       int64 safe_hybrid_time = -1,
       int wal_segment_index = 0);
 
+  Status InitVirtualWAL(const xrepl::StreamId& stream_id, const std::vector<TableId> table_ids);
+
+  GetAllPendingChangesResponse GetAllPendingChangesFromCdc(
+      const xrepl::StreamId& stream_id, std::vector<TableId> table_ids);
+
   GetAllPendingChangesResponse GetAllPendingChangesFromCdc(
       const xrepl::StreamId& stream_id,
       const google::protobuf::RepeatedPtrField<master::TabletLocationsPB>& tablets,
@@ -496,6 +505,10 @@ class CDCSDKYsqlTest : public CDCSDKTestBase {
 
   void TestGetChanges(
       const uint32_t replication_factor, bool add_tables_without_primary_key = false);
+
+  Result<GetConsistentChangesResponsePB> GetConsistentChangesFromCDC(
+      const xrepl::StreamId& stream_id, const std::vector<TableId> table_ids,
+      const bool should_retry);
 
   void TestIntentGarbageCollectionFlag(
       const uint32_t num_tservers,
