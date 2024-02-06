@@ -1651,6 +1651,20 @@ Result<string> CDCSDKYsqlTest::GetUniverseId(PostgresMiniCluster* cluster) {
           PrepareChangeRequest(&change_req, stream_id, tablet_ids[i], cp->second, i);
         }
 
+        // If the stream is configured for explicit checkpointing, then we will populate the
+        // explicit_cdc_sdk_checkpoint field as well.
+        auto iter = explicit_checkpoints.find(tablet_ids[i]);
+        CDCSDKCheckpointPB explicit_cp;
+        if (explicit_checkpointing_enabled) {
+          if (iter == explicit_checkpoints.end()) {
+            change_req.mutable_explicit_cdc_sdk_checkpoint()->CopyFrom(explicit_checkpoint);
+          } else {
+            explicit_cp = iter->second;
+            change_req.mutable_explicit_cdc_sdk_checkpoint()->CopyFrom(explicit_cp);
+
+          }
+        }
+
         rpc::RpcController get_changes_rpc;
 
         LOG(INFO) << "Calling GetChanges on " << tablet_ids[i] << " with "
@@ -1667,6 +1681,14 @@ Result<string> CDCSDKYsqlTest::GetUniverseId(PostgresMiniCluster* cluster) {
 
             if (record.row_message().op() != RowMessage::DDL) {
               records[tablet_ids[i]].push_back(record);
+            }
+
+            if (explicit_checkpointing_enabled) {
+              explicit_cp.set_term(record.from_op_id().term());
+              explicit_cp.set_index(record.from_op_id().index());
+              explicit_cp.set_key(record.from_op_id().write_id_key());
+              explicit_cp.set_write_id(record.from_op_id().write_id());
+              explicit_cp.set_snapshot_time(record.row_message().commit_time() - 1);
             }
           }
 
@@ -1944,7 +1966,6 @@ Result<string> CDCSDKYsqlTest::GetUniverseId(PostgresMiniCluster* cluster) {
 
   void CDCSDKYsqlTest::TestGetChanges(
       const uint32_t replication_factor, bool add_tables_without_primary_key) {
-    ANNOTATE_UNPROTECTED_WRITE(FLAGS_cdc_stream_records_threshold_size_bytes) = 1_KB;
     ASSERT_OK(SetUpWithParams(replication_factor, 1, false));
 
     if (add_tables_without_primary_key) {
@@ -1956,43 +1977,35 @@ Result<string> CDCSDKYsqlTest::GetUniverseId(PostgresMiniCluster* cluster) {
       }
     }
 
-    auto table = ASSERT_RESULT(CreateTable(&test_cluster_, kNamespaceName, kTableName, 2));
+    auto table = ASSERT_RESULT(CreateTable(&test_cluster_, kNamespaceName, kTableName));
     google::protobuf::RepeatedPtrField<master::TabletLocationsPB> tablets;
     ASSERT_OK(test_client()->GetTablets(
         table, 0, &tablets,
         /* partition_list_version =*/nullptr));
-    ASSERT_EQ(tablets.size(), 2);
+    ASSERT_EQ(tablets.size(), 1);
 
-    LOG(INFO) << "test:Here";
     std::string table_id = ASSERT_RESULT(GetTableId(&test_cluster_, kNamespaceName, kTableName));
-    xrepl::StreamId stream_id_1 = ASSERT_RESULT(CreateDBStreamWithReplicationSlot());
+    xrepl::StreamId stream_id = ASSERT_RESULT(CreateDBStreamWithReplicationSlot());
 
-    auto resp = ASSERT_RESULT(SetCDCCheckpoint(stream_id_1, tablets, OpId::Min(), 0, true, 0));
-    resp = ASSERT_RESULT(SetCDCCheckpoint(stream_id_1, tablets, OpId::Min(), 0, true, 1));
-    LOG(INFO) << "test:Here";
+    auto resp = ASSERT_RESULT(SetCDCCheckpoint(stream_id, tablets));
     ASSERT_FALSE(resp.has_error());
-    for (int i = 0; i < 5; i++) {
-      ASSERT_OK(WriteRowsHelper(i * 5 /* start */, (i + 1) * 5 /* end */, &test_cluster_, true));
-    }
-    LOG(INFO) << "test:Here";
-    const int64_t expected_records_size = 25;
-    // int expected_record[] = {0 /* key */, 1 /* value */};
+    ASSERT_OK(WriteRows(0 /* start */, 1 /* end */, &test_cluster_));
+
+    const uint32_t expected_records_size = 1;
+    int expected_record[] = {0 /* key */, 1 /* value */};
 
     SleepFor(MonoDelta::FromSeconds(5));
-    LOG(INFO) << "test:Here";
-    int64 ins_count =
-        ASSERT_RESULT(GetChangeRecordCount(stream_id_1, {table_id}, expected_records_size, true));
-    // LOG(INFO) <<"change_resp: " << change_resp.DebugString();
+    GetChangesResponsePB change_resp = ASSERT_RESULT(GetChangesFromCDC(stream_id, tablets));
 
-    // uint32_t record_size = change_resp.cdc_sdk_proto_records_size();
-    // uint32_t ins_count = 0;
-    // for (uint32_t i = 0; i < record_size; ++i) {
-    //   if (change_resp.cdc_sdk_proto_records(i).row_message().op() == RowMessage::INSERT) {
-    //     // const CDCSDKProtoRecordPB record = change_resp.cdc_sdk_proto_records(i);
-    //     // AssertKeyValue(record, expected_record[0], expected_record[1]);
-    //     ++ins_count;
-    //   }
-    // }
+    uint32_t record_size = change_resp.cdc_sdk_proto_records_size();
+    uint32_t ins_count = 0;
+    for (uint32_t i = 0; i < record_size; ++i) {
+      if (change_resp.cdc_sdk_proto_records(i).row_message().op() == RowMessage::INSERT) {
+        const CDCSDKProtoRecordPB record = change_resp.cdc_sdk_proto_records(i);
+        AssertKeyValue(record, expected_record[0], expected_record[1]);
+        ++ins_count;
+      }
+    }
     LOG(INFO) << "Got " << ins_count << " insert records";
     ASSERT_EQ(expected_records_size, ins_count);
   }
