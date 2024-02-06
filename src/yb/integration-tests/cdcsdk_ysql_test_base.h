@@ -478,7 +478,8 @@ class CDCSDKYsqlTest : public CDCSDKTestBase {
   Status InitVirtualWAL(const xrepl::StreamId& stream_id, const std::vector<TableId> table_ids);
 
   GetAllPendingChangesResponse GetAllPendingChangesFromCdc(
-      const xrepl::StreamId& stream_id, std::vector<TableId> table_ids);
+      const xrepl::StreamId& stream_id, std::vector<TableId> table_ids,
+      bool init_virtual_wal = true);
 
   GetAllPendingChangesResponse GetAllPendingChangesFromCdc(
       const xrepl::StreamId& stream_id,
@@ -565,7 +566,13 @@ class CDCSDKYsqlTest : public CDCSDKTestBase {
 
   void ValidateColumnCounts(const GetChangesResponsePB& resp, uint32_t excepted_column_counts);
 
+  void ValidateColumnCounts(
+      const GetConsistentChangesResponsePB& resp, uint32_t excepted_column_counts);
+
   void ValidateInsertCounts(const GetChangesResponsePB& resp, uint32_t excepted_insert_counts);
+
+  void ValidateInsertCounts(
+      const GetConsistentChangesResponsePB& resp, uint32_t excepted_insert_counts);
 
   void WaitUntilSplitIsSuccesful(
       const TabletId& tablet_id, const yb::client::YBTableName& table,
