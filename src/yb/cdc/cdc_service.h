@@ -230,8 +230,8 @@ class CDCServiceImpl : public CDCServiceIf {
       HostPort hostport, CoarseTimePoint deadline);
 
   Status GetTabletListAndCheckpoint(
-      const std::string& stream_id, const TableId& table_id, HostPort hostport,
-      CoarseTimePoint deadline);
+      const std::string& stream_id, const TableId table_id, HostPort hostport,
+      CoarseTimePoint deadline, const TabletId parent_tablet_id = "");
 
   Status GetConsistentChangesInternal(
       const std::string& stream_id, GetConsistentChangesResponsePB* resp, HostPort hostport,
@@ -631,6 +631,7 @@ class CDCServiceImpl : public CDCServiceIf {
   uint32_t xcluster_config_version_ GUARDED_BY(mutex_) = 0;
 
   std::unordered_set<TableId> publication_table_list_;
+  std::unordered_map<TabletId, TableId> tablet_to_table_map_;
   std::unordered_set<TabletId> tablet_list_to_poll_;
   std::unordered_map<TabletId, TabletCDCSDKCheckpointInfo> tablet_checkpoint_map_;
   std::unordered_map<TabletId, std::vector<CDCSDKProtoRecordPB>> tablet_queues_;

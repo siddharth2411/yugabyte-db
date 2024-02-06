@@ -80,6 +80,7 @@
 #include "yb/util/scope_exit.h"
 #include "yb/util/service_util.h"
 #include "yb/util/shared_lock.h"
+#include "yb/util/status.h"
 #include "yb/util/status_format.h"
 #include "yb/util/status_log.h"
 #include "yb/util/stol_utils.h"
@@ -4276,72 +4277,94 @@ void CDCServiceImpl::InitVirtualWALForCDC(
       STATUS(InvalidArgument, "Stream ID is required to initialise VirtualWAL"),
       resp->mutable_error(), CDCErrorPB::INVALID_REQUEST, context);
 
-  LOG(INFO) << "InitVirtualWALForCDC:Here";
   auto stream_id = req->stream_id();
   std::unordered_set<TableId> table_list;
   for (const auto& table_id : req->table_id()) {
     table_list.insert(table_id);
   }
-  LOG(INFO) << "InitVirtualWALForCDC:Here";
   HostPort hostport(context.local_address());
   Status s =
       InitVirtualWALInternal(stream_id, table_list, hostport, GetDeadline(context, client()));
-  LOG(INFO) << "InitVirtualWALForCDC:Here";
   if (!s.ok()) {
-    LOG(WARNING) << "VirtualWAL init failed for stream_id: " << stream_id;
-    CDCError error(s);
-    SetupErrorAndRespond(resp->mutable_error(), s, error.value(), &context);
+    std::string msg = Format("VirtualWAL init failed for stream_id: $0", stream_id);
+    RPC_STATUS_RETURN_ERROR(
+        s.CloneAndPrepend(msg), resp->mutable_error(), CDCErrorPB::INTERNAL_ERROR, context);
     return;
   }
-  LOG(INFO) << "InitVirtualWALForCDC:Here";
   context.RespondSuccess();
 }
 
 Status CDCServiceImpl::InitVirtualWALInternal(
     const std::string& stream_id, const std::unordered_set<TableId>& table_list, HostPort hostport,
     CoarseTimePoint deadline) {
-  LOG(INFO) << "InitVirtualWAL:Here";
   for (const auto& table_id : table_list) {
     publication_table_list_.insert(table_id);
-    LOG(INFO) << "InitVirtualWAL:Here";
     Status s = GetTabletListAndCheckpoint(stream_id, table_id, hostport, deadline);
-    LOG(INFO) << "InitVirtualWAL:Here";
     if (!s.ok()) {
-      LOG(ERROR) << "Error fetching tablet list for table_id: " << table_id;
-      return s;
+      string msg = Format("Error fetching tablet list & checkpoints for table_id: $0", table_id);
+      RETURN_NOT_OK_PREPEND(s, msg);
     }
-    LOG(INFO) << "InitVirtualWAL:Here";
   }
-  LOG(INFO) << "InitVirtualWAL:Here";
   return Status::OK();
 }
 
 Status CDCServiceImpl::GetTabletListAndCheckpoint(
-    const std::string& stream_id, const TableId& table_id, HostPort hostport,
-    CoarseTimePoint deadline) {
-  LOG(INFO) << "GetTabletListAndCheckpoint:Here";
+    const std::string& stream_id, const TableId table_id, HostPort hostport,
+    CoarseTimePoint deadline, const TabletId parent_tablet_id) {
   GetTabletListToPollForCDCRequestPB req;
-  GetTabletListToPollForCDCResponsePB resp;
+  GetTabletListToPollForCDCResponsePB final_resp;
   auto table_info = req.mutable_table_info();
   table_info->set_stream_id(stream_id);
   table_info->set_table_id(table_id);
-  LOG(INFO) << "GetTabletListAndCheckpoint:Here";
-  // TODO: Change this RPC call to a local call
+  if (!parent_tablet_id.empty()) {
+    req.set_tablet_id(parent_tablet_id);
+  }
+  // TODO(20946): Change this RPC call to a local call.
   auto cdc_proxy = GetCDCServiceProxy(hostport);
-  rpc::RpcController rpc;
-  rpc.set_deadline(deadline);
-  RETURN_NOT_OK(cdc_proxy->GetTabletListToPollForCDC(req, &resp, &rpc));
-  LOG(INFO) << "GetTabletListAndCheckpoint:Here";
-  if (resp.has_error()) {
-    return StatusFromPB(resp.error().status());
+  // TODO(20947): Limit max retries to a finite number.
+  while (true) {
+    GetTabletListToPollForCDCResponsePB resp;
+    rpc::RpcController rpc;
+    rpc.set_deadline(deadline);
+    Status s = cdc_proxy->GetTabletListToPollForCDC(req, &resp, &rpc);
+    if (s.ok() && !resp.has_error()) {
+      if (!parent_tablet_id.empty() && resp.tablet_checkpoint_pairs_size() != 2) {
+        // should receive two children tablets.
+        LOG(WARNING)
+            << "GetTabletListToPollForCDC didnt return two children tablets for tablet_id: "
+            << parent_tablet_id;
+      } else {
+        final_resp = resp;
+        break;
+      }
+    }
+    // TODO(20947): Confirm if there are specfic error codes, only for which we want to retry.
+    VLOG(2) << "Retrying GetTabletListToPollForCDC for stream_id: " << stream_id
+            << "and table_id: " << table_id;
   }
 
-  LOG(INFO) << "GetTabletListAndCheckpoint:Here";
-  for (const auto& tablet_checkpoint_pair : resp.tablet_checkpoint_pairs()) {
+  if (!parent_tablet_id.empty()) {
+    // Remove parent tablet's entry from all relevant maps.
+    if (tablet_checkpoint_map_.contains(parent_tablet_id)) {
+      tablet_checkpoint_map_.erase(parent_tablet_id);
+    }
+
+    if (tablet_queues_.contains(parent_tablet_id)) {
+      tablet_queues_.erase(parent_tablet_id);
+    }
+
+    if (tablet_to_table_map_.contains(parent_tablet_id)) {
+      tablet_to_table_map_.erase(parent_tablet_id);
+    }
+  }
+
+  for (const auto& tablet_checkpoint_pair : final_resp.tablet_checkpoint_pairs()) {
     auto tablet_id = tablet_checkpoint_pair.tablet_locations().tablet_id();
-    LOG(INFO) << "Sid: TabletID: " << tablet_id;
+    if (!tablet_to_table_map_.contains(tablet_id)) {
+      tablet_to_table_map_[tablet_id] = table_id;
+    }
     auto checkpoint = tablet_checkpoint_pair.cdc_sdk_checkpoint();
-    if (tablet_checkpoint_map_.find(tablet_id) == tablet_checkpoint_map_.end()) {
+    if (!tablet_checkpoint_map_.contains(tablet_id)) {
       TabletCDCSDKCheckpointInfo info;
       info.from_op_id = OpId::FromPB(checkpoint);
       info.key = checkpoint.key();
@@ -4350,12 +4373,11 @@ Status CDCServiceImpl::GetTabletListAndCheckpoint(
       info.safe_hybrid_time = -1;
       info.wal_segment_index = 0;
       tablet_checkpoint_map_[tablet_id] = info;
-      LOG(INFO) << "Adding tablet queue for tablet_id: " << tablet_id
-                << " cdc_sdk_checkpt: " << checkpoint.DebugString();
+      VLOG(2) << "Adding tablet queue for tablet_id: " << tablet_id
+              << " cdc_sdk_checkpt: " << checkpoint.DebugString();
     }
 
-    // create tablet queue for this tablet
-    if (tablet_queues_.find(tablet_id) == tablet_queues_.end()) {
+    if (!tablet_queues_.contains(tablet_id)) {
       tablet_queues_[tablet_id] = std::vector<CDCSDKProtoRecordPB>();
     }
   }
@@ -4379,24 +4401,12 @@ void CDCServiceImpl::GetConsistentChanges(
   Status s =
       GetConsistentChangesInternal(stream_id, resp, hostport, GetDeadline(context, client()));
   if (!s.ok()) {
-    LOG(WARNING) << "GetChanges failed";
-    CDCError error(s);
-    SetupErrorAndRespond(resp->mutable_error(), s, error.value(), &context);
-    return;
+    std::string msg = Format("GetConsistentChanges failed for stream_id: $0", stream_id);
+    RPC_STATUS_RETURN_ERROR(
+        s.CloneAndPrepend(msg), resp->mutable_error(), CDCErrorPB::INTERNAL_ERROR, context);
   }
-  LOG(INFO) << "GetConsistentChangesResponsePB record size: " << resp->cdc_sdk_proto_records_size();
-  context.RespondSuccess();
-}
 
-void PrintPQContents(std::priority_queue<
-                     TabletIdRecordPair, std::vector<TabletIdRecordPair>, CompareCDCSDKProtoRecords>
-                         sorted_records) {
-  LOG(INFO) << "printing contents of PQ";
-  while (!sorted_records.empty()) {
-    LOG(INFO) << "Tablet_id: " << sorted_records.top().first
-              << " Record: " << sorted_records.top().second.DebugString();
-    sorted_records.pop();
-  }
+  context.RespondSuccess();
 }
 
 Status CDCServiceImpl::GetConsistentChangesInternal(
@@ -4413,11 +4423,21 @@ Status CDCServiceImpl::GetConsistentChangesInternal(
     }
   }
   if (!tablet_to_poll_list.empty()) {
-    Status s = GetChangesInternal(stream_id, tablet_to_poll_list, hostport, deadline);
-    if (!s.ok()) {
-      LOG(ERROR) << "Error calling GetChanges on tablets for stream_id: " << stream_id;
-      return s;
+    RETURN_NOT_OK(GetChangesInternal(stream_id, tablet_to_poll_list, hostport, deadline));
+  }
+
+  // Recheck tablet queues map to account for new tablet queues created after tablet splits.
+  tablet_to_poll_list.clear();
+  for (const auto& tablet_queue : tablet_queues_) {
+    auto tablet_id = tablet_queue.first;
+    auto records_queue = tablet_queue.second;
+
+    if (records_queue.empty()) {
+      tablet_to_poll_list.insert(tablet_id);
     }
+  }
+  if (!tablet_to_poll_list.empty()) {
+    RETURN_NOT_OK(GetChangesInternal(stream_id, tablet_to_poll_list, hostport, deadline));
   }
 
   std::priority_queue<
@@ -4431,14 +4451,12 @@ Status CDCServiceImpl::GetConsistentChangesInternal(
     auto next_record = VERIFY_RESULT(
         FindConsistentRecord(stream_id, &sorted_records, &empty_tablet_queues, hostport, deadline));
     if (next_record.row_message().op() == RowMessage_Op_SAFEPOINT) {
-      LOG(INFO) << "Skipped safepoint record";
       continue;
     }
     auto records = resp->add_cdc_sdk_proto_records();
     records->CopyFrom(next_record);
-    LOG(INFO) << "assembled_virtual_wal_.size(): " << resp->cdc_sdk_proto_records_size();
   }
-  // TODO: Assign LSN & TxnID
+  // TODO: Assign LSN & TxnID.
 
   return Status::OK();
 }
@@ -4448,10 +4466,13 @@ Status CDCServiceImpl::GetChangesInternal(
     HostPort hostport, CoarseTimePoint deadline) {
   for (const auto& tablet_id : tablet_to_poll_list) {
     GetChangesRequestPB req;
-    GetChangesResponsePB resp;
+    GetChangesResponsePB final_resp;
+    bool has_tablet_split = false;
 
-    const TabletCDCSDKCheckpointInfo info = tablet_checkpoint_map_[tablet_id];
-    LOG(INFO) << "Got Checkpointinfo";
+    RSTATUS_DCHECK(
+        tablet_checkpoint_map_.contains(tablet_id), InternalError,
+        Format("Couldn't find entry in the tablet checkpoint map for tablet_id: ", tablet_id));
+    const TabletCDCSDKCheckpointInfo& info = tablet_checkpoint_map_[tablet_id];
     req.set_stream_id(stream_id);
     req.set_tablet_id(tablet_id);
     req.set_cdcsdk_request_source(cdc::CDCSDKRequestSource::WALSENDER);
@@ -4464,40 +4485,69 @@ Status CDCServiceImpl::GetChangesInternal(
     req_checkpoint->set_key(info.key);
     req_checkpoint->set_write_id(info.write_id);
     req_checkpoint->set_snapshot_time(info.snapshot_time);
-    LOG(INFO) << "Formed req";
-    // TODO: Change this RPC call to a local call
+    // TODO(20946): Change this RPC call to a local call.
     auto cdc_proxy = GetCDCServiceProxy(hostport);
-    LOG(INFO) << "Got CDC proxy";
-    rpc::RpcController rpc;
-    rpc.set_deadline(deadline);
-    RETURN_NOT_OK(cdc_proxy->GetChanges(req, &resp, &rpc));
-    if (resp.has_error()) {
-      return StatusFromPB(resp.error().status());
+    // TODO(20947): Limit the retry to a fix number.
+    while (true) {
+      GetChangesResponsePB resp;
+      rpc::RpcController rpc;
+      rpc.set_deadline(deadline);
+      Status s = (cdc_proxy->GetChanges(req, &resp, &rpc));
+      if (s.ok() && !resp.has_error()) {
+        final_resp = resp;
+        break;
+      } else if (s.ok() && resp.has_error()) {
+        s = StatusFromPB(resp.error().status());
+        if (s.IsTabletSplit()) {
+          RSTATUS_DCHECK(
+              tablet_to_table_map_.contains(tablet_id), InternalError,
+              Format("Couldnt find the correspondig table_id for tablet_id: ", tablet_id));
+          LOG(INFO) << "Tablet split encountered on tablet_id : " << tablet_id
+                    << " on table_id: " << tablet_to_table_map_[tablet_id]
+                    << ". Fetching children tablets";
+          RETURN_NOT_OK_PREPEND(
+              GetTabletListAndCheckpoint(
+                  stream_id, tablet_to_table_map_[tablet_id], hostport, deadline, tablet_id),
+              Format("Error fetching children tablets for tablet_id: $0", tablet_id));
+          final_resp = resp;
+          has_tablet_split = true;
+          break;
+        } else if (s.IsLeaderNotReadyToServe() || s.IsNotFound() || s.IsTryAgain()) {
+          // TODO(20947): Confirm if there are any other error code for which we want to retry.
+          VLOG(2) << "Retrying GetChanges RPC call for stream_id: " << stream_id
+                  << ", tablet_id: " << tablet_id;
+          continue;
+        } else {
+          RETURN_NOT_OK_PREPEND(s, Format("Error calling GetChanges on tablet_id: $0", tablet_id));
+        }
+      }
+    }
+
+    // If tablet has split, skip further processing of the response.
+    if (has_tablet_split) {
+      continue;
     }
 
     // TODO: Might require write_lock.
-    LOG(INFO) << "Polled on TabletId: " << tablet_id;
-    LOG(INFO) << "GetChanges resp size: " << resp.cdc_sdk_proto_records_size();
-    LOG(INFO) << "GetChanges resp: " << resp.DebugString();
-    vector<CDCSDKProtoRecordPB>* tablet_queue = &tablet_queues_[tablet_id];
-    LOG(INFO) << "Tablet queue size: " << tablet_queue->size();
-    if (resp.cdc_sdk_proto_records_size() > 0) {
-      for (const auto& record : resp.cdc_sdk_proto_records()) {
-        // Assumes that tablet level ordering is maintained in the GetChanges response. Hence,
-        // skipping comparing commit_time of records.
-        tablet_queue->push_back(record);
+    RSTATUS_DCHECK(
+        tablet_queues_.contains(tablet_id), InternalError,
+        Format("Couldn't find tablet queue for tablet_id: ", tablet_id));
+    vector<CDCSDKProtoRecordPB>& tablet_queue = tablet_queues_[tablet_id];
+    if (final_resp.cdc_sdk_proto_records_size() > 0) {
+      for (const auto& record : final_resp.cdc_sdk_proto_records()) {
+        tablet_queue.push_back(record);
       }
     }
-    LOG(INFO) << "Tablet queue size after insertion: " << tablet_queue->size();
-    // Update tablet's checkpoint info
-    TabletCDCSDKCheckpointInfo tablet_checkpoint_info;
-    tablet_checkpoint_info.from_op_id = OpId::FromPB(resp.cdc_sdk_checkpoint());
-    tablet_checkpoint_info.key = resp.cdc_sdk_checkpoint().key();
-    tablet_checkpoint_info.write_id = resp.cdc_sdk_checkpoint().write_id();
-    tablet_checkpoint_info.snapshot_time = resp.cdc_sdk_checkpoint().snapshot_time();
-    tablet_checkpoint_info.safe_hybrid_time = resp.safe_hybrid_time();
-    tablet_checkpoint_info.wal_segment_index = resp.wal_segment_index();
-    tablet_checkpoint_map_[tablet_id] = tablet_checkpoint_info;
+    RSTATUS_DCHECK(
+        tablet_checkpoint_map_.contains(tablet_id), InternalError,
+        Format("Couldn't find entry in the tablet checkpoint map for tablet_id: ", tablet_id));
+    TabletCDCSDKCheckpointInfo& tablet_checkpoint_info = tablet_checkpoint_map_[tablet_id];
+    tablet_checkpoint_info.from_op_id = OpId::FromPB(final_resp.cdc_sdk_checkpoint());
+    tablet_checkpoint_info.key = final_resp.cdc_sdk_checkpoint().key();
+    tablet_checkpoint_info.write_id = final_resp.cdc_sdk_checkpoint().write_id();
+    tablet_checkpoint_info.snapshot_time = final_resp.cdc_sdk_checkpoint().snapshot_time();
+    tablet_checkpoint_info.safe_hybrid_time = final_resp.safe_hybrid_time();
+    tablet_checkpoint_info.wal_segment_index = final_resp.wal_segment_index();
   }
 
   return Status::OK();
@@ -4507,11 +4557,11 @@ void CDCServiceImpl::AddEntriesToQueue(std::priority_queue<
                                        TabletIdRecordPair, std::vector<TabletIdRecordPair>,
                                        CompareCDCSDKProtoRecords>* sorted_records) {
   for (auto& tablet_queue : tablet_queues_) {
-    if (!tablet_queue.second.empty()) {
-      sorted_records->push({tablet_queue.first, tablet_queue.second.front()});
-    }
+    RSTATUS_DCHECK(
+        !tablet_queue.second.empty(), InternalError,
+        Format("Found empty Tablet queue for tablet_id : ", tablet_queue.first));
+    sorted_records->push({tablet_queue.first, tablet_queue.second.front()});
   }
-  LOG(INFO) << "After adding entries in PQ";
 }
 
 Result<CDCSDKProtoRecordPB> CDCServiceImpl::FindConsistentRecord(
@@ -4520,15 +4570,12 @@ Result<CDCSDKProtoRecordPB> CDCServiceImpl::FindConsistentRecord(
         TabletIdRecordPair, std::vector<TabletIdRecordPair>, CompareCDCSDKProtoRecords>*
         sorted_records,
     std::vector<TabletId>* empty_tablet_queues, HostPort hostport, CoarseTimePoint deadline) {
-  LOG(INFO) << "Inside FindConsistentRecord";
-  // PrintPQContents(*sorted_records);
   const auto record = sorted_records->top();
   auto tablet_id = record.first;
   sorted_records->pop();
-  LOG(INFO) << "Popped from PQ succesfull";
   tablet_queues_[record.first].erase(tablet_queues_[record.first].begin());
 
-  // Add next record from the tablet queue if available
+  // Add next record from the tablet queue if available.
   if (!tablet_queues_[tablet_id].empty()) {
     sorted_records->push({tablet_id, tablet_queues_[tablet_id].front()});
   } else {
