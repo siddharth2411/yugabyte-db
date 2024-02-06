@@ -4365,6 +4365,7 @@ Status CDCServiceImpl::GetTabletListAndCheckpoint(
     if (!tablet_checkpoint_map_.contains(tablet_id)) {
       TabletCDCSDKCheckpointInfo info;
       info.from_op_id = OpId::FromPB(checkpoint);
+      // TODO(20951): if key is non-empty, mark snapshot done.
       info.key = checkpoint.key();
       info.write_id = checkpoint.write_id();
       info.snapshot_time = checkpoint.snapshot_time();
