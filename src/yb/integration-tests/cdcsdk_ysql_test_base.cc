@@ -1582,10 +1582,7 @@ Result<string> CDCSDKYsqlTest::GetUniverseId(PostgresMiniCluster* cluster) {
           return true;
         },
         MonoDelta::FromSeconds(kRpcTimeout),
-        "InitVirtualWal timed out waiting for Leader to get ready"));
-
-    // GetChangesRequestPB change_req;
-    // GetChangesResponsePB change_resp;
+        "InitVirtualWal timed out"));
 
     int64 total_record_count = 0;
 
@@ -1603,57 +1600,18 @@ Result<string> CDCSDKYsqlTest::GetUniverseId(PostgresMiniCluster* cluster) {
             // Process the records here
             LOG(INFO) << "Received consistent records size: "
                       << change_resp.cdc_sdk_proto_records_size();
-            LOG(INFO) << "Received consistent records: " << change_resp.DebugString();
             for (auto record : change_resp.cdc_sdk_proto_records()) {
               if (IsDMLRecord(record)) {
                 ++total_record_count;
               }
-
-              // if (record.row_message().op() != RowMessage::DDL) {
-              //   records[tablet_ids[i]].push_back(record);
-              // }
             }
-
-            // LOG(INFO) << "Received consistent records: " << change_resp.DebugString();
-          } else {
-            status = StatusFromPB(change_resp.error().status());
-            //   if (status.IsTabletSplit()) {
-            //     LOG(INFO) << "Got a tablet split on tablet " << tablet_ids[i]
-            //               << ", fetching new tablets";
-
-            //     auto get_tablets_resp = VERIFY_RESULT(
-            //         GetTabletListToPollForCDC(stream_id, table.table_id(), tablet_ids[i]));
-
-            //     VERIFY_EQ(get_tablets_resp.tablet_checkpoint_pairs_size(), 2);
-
-            //     // Store the opIds for the children tablets.
-            //     for (int j = 0; j < get_tablets_resp.tablet_checkpoint_pairs_size(); ++j) {
-            //       auto pair = get_tablets_resp.tablet_checkpoint_pairs(j);
-            //       tablet_to_checkpoint[pair.tablet_locations().tablet_id()] =
-            //       pair.cdc_sdk_checkpoint();
-            //       explicit_checkpoints[pair.tablet_locations().tablet_id()] =
-            //       pair.cdc_sdk_checkpoint();
-
-            //       tablet_ids.push_back(pair.tablet_locations().tablet_id());
-
-            //       LOG(INFO) << "Assigned from_op_id " << pair.cdc_sdk_checkpoint().term() << ":"
-            //                 << pair.cdc_sdk_checkpoint().index() << " to child "
-            //                 << pair.tablet_locations().tablet_id();
-            //     }
-
-            //     tablet_ids.erase(find(tablet_ids.begin(), tablet_ids.end(), tablet_ids[i]));
-
-            //     break;
-            //   } else {
-            RETURN_NOT_OK(status);
-            //   }
           }
 
           LOG(INFO) << "Total records consumed so far: " << total_record_count;
 
           return total_record_count >= expected_total_records;
         },
-        MonoDelta::FromSeconds(300), "Timed out while fetching the changes"));
+        MonoDelta::FromSeconds(600), "Timed out while fetching the changes"));
 
     return total_record_count;
   }
@@ -1693,20 +1651,6 @@ Result<string> CDCSDKYsqlTest::GetUniverseId(PostgresMiniCluster* cluster) {
           PrepareChangeRequest(&change_req, stream_id, tablet_ids[i], cp->second, i);
         }
 
-        // If the stream is configured for explicit checkpointing, then we will populate the
-        // explicit_cdc_sdk_checkpoint field as well.
-        auto iter = explicit_checkpoints.find(tablet_ids[i]);
-        CDCSDKCheckpointPB explicit_cp;
-        if (explicit_checkpointing_enabled) {
-          if (iter == explicit_checkpoints.end()) {
-            change_req.mutable_explicit_cdc_sdk_checkpoint()->CopyFrom(explicit_checkpoint);
-          } else {
-            explicit_cp = iter->second;
-            change_req.mutable_explicit_cdc_sdk_checkpoint()->CopyFrom(explicit_cp);
-
-          }
-        }
-
         rpc::RpcController get_changes_rpc;
 
         LOG(INFO) << "Calling GetChanges on " << tablet_ids[i] << " with "
@@ -1723,14 +1667,6 @@ Result<string> CDCSDKYsqlTest::GetUniverseId(PostgresMiniCluster* cluster) {
 
             if (record.row_message().op() != RowMessage::DDL) {
               records[tablet_ids[i]].push_back(record);
-            }
-
-            if (explicit_checkpointing_enabled) {
-              explicit_cp.set_term(record.from_op_id().term());
-              explicit_cp.set_index(record.from_op_id().index());
-              explicit_cp.set_key(record.from_op_id().write_id_key());
-              explicit_cp.set_write_id(record.from_op_id().write_id());
-              explicit_cp.set_snapshot_time(record.row_message().commit_time() - 1);
             }
           }
 
@@ -1860,20 +1796,17 @@ Result<string> CDCSDKYsqlTest::GetUniverseId(PostgresMiniCluster* cluster) {
   }
 
   CDCSDKYsqlTest::GetAllPendingChangesResponse CDCSDKYsqlTest::GetAllPendingChangesFromCdc(
-      const xrepl::StreamId& stream_id, std::vector<TableId> table_ids) {
+      const xrepl::StreamId& stream_id, std::vector<TableId> table_ids, bool init_virtual_wal) {
     GetAllPendingChangesResponse resp;
-    Status s = InitVirtualWAL(stream_id, table_ids);
-    if (!s.ok()) {
-      LOG(INFO) << "Returning empty response because InitVirtual returned non-ok status";
-      return resp;
+    if (init_virtual_wal) {
+      Status s = InitVirtualWAL(stream_id, table_ids);
+      if (!s.ok()) {
+        LOG(INFO) << "Error while trying to initialize virtual WAL";
+        return resp;
+      }
     }
 
     int prev_records = 0;
-    // CDCSDKCheckpointPB prev_checkpoint;
-    // int64 prev_safetime = safe_hybrid_time;
-    // int prev_index = wal_segment_index;
-    // const CDCSDKCheckpointPB* prev_checkpoint_ptr = cp;
-
     do {
       GetConsistentChangesResponsePB change_resp;
       auto get_changes_result = GetConsistentChangesFromCDC(stream_id, table_ids, true);
@@ -1881,7 +1814,7 @@ Result<string> CDCSDKYsqlTest::GetUniverseId(PostgresMiniCluster* cluster) {
       if (get_changes_result.ok()) {
         change_resp = *get_changes_result;
       } else {
-        LOG(ERROR) << "Encountered error while calling GetChanges on stream: " << stream_id
+        LOG(ERROR) << "Encountered error while calling GetConsistentChanges on stream: " << stream_id
                    << ", status: " << get_changes_result.status();
         break;
       }
@@ -1889,16 +1822,9 @@ Result<string> CDCSDKYsqlTest::GetUniverseId(PostgresMiniCluster* cluster) {
       for (int i = 0; i < change_resp.cdc_sdk_proto_records_size(); i++) {
         resp.records.push_back(change_resp.cdc_sdk_proto_records(i));
       }
-
-      // prev_checkpoint = change_resp.cdc_sdk_checkpoint();
-      // prev_checkpoint_ptr = &prev_checkpoint;
-      // prev_safetime = change_resp.has_safe_hybrid_time() ? change_resp.safe_hybrid_time() : -1;
-      // prev_index = change_resp.wal_segment_index();
       prev_records = change_resp.cdc_sdk_proto_records_size();
     } while (prev_records != 0);
 
-    // resp.checkpoint = prev_checkpoint;
-    // resp.safe_hybrid_time = prev_safetime;
     return resp;
   }
 
@@ -2506,6 +2432,17 @@ Result<string> CDCSDKYsqlTest::GetUniverseId(PostgresMiniCluster* cluster) {
     return *row->cdc_sdk_safe_time;
   }
 
+  void CDCSDKYsqlTest::ValidateColumnCounts(
+      const GetConsistentChangesResponsePB& resp, uint32_t excepted_column_counts) {
+    uint32_t record_size = resp.cdc_sdk_proto_records_size();
+    for (uint32_t idx = 0; idx < record_size; idx++) {
+      const CDCSDKProtoRecordPB record = resp.cdc_sdk_proto_records(idx);
+      if (record.row_message().op() == RowMessage::INSERT) {
+        ASSERT_EQ(record.row_message().new_tuple_size(), excepted_column_counts);
+      }
+    }
+  }
+
   void CDCSDKYsqlTest::ValidateColumnCounts(const GetChangesResponsePB& resp,
     uint32_t excepted_column_counts) {
     uint32_t record_size = resp.cdc_sdk_proto_records_size();
@@ -2515,6 +2452,19 @@ Result<string> CDCSDKYsqlTest::GetUniverseId(PostgresMiniCluster* cluster) {
         ASSERT_EQ(record.row_message().new_tuple_size(), excepted_column_counts);
       }
     }
+  }
+
+  void CDCSDKYsqlTest::ValidateInsertCounts(
+      const GetConsistentChangesResponsePB& resp, uint32_t excepted_insert_counts) {
+    uint32_t record_size = resp.cdc_sdk_proto_records_size();
+    uint32_t insert_count = 0;
+    for (uint32_t idx = 0; idx < record_size; idx++) {
+      const CDCSDKProtoRecordPB record = resp.cdc_sdk_proto_records(idx);
+      if (record.row_message().op() == RowMessage::INSERT) {
+        insert_count += 1;
+      }
+    }
+    ASSERT_EQ(insert_count, excepted_insert_counts);
   }
 
   void CDCSDKYsqlTest::ValidateInsertCounts(const GetChangesResponsePB& resp,
