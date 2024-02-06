@@ -1814,8 +1814,8 @@ Result<string> CDCSDKYsqlTest::GetUniverseId(PostgresMiniCluster* cluster) {
       if (get_changes_result.ok()) {
         change_resp = *get_changes_result;
       } else {
-        LOG(ERROR) << "Encountered error while calling GetConsistentChanges on stream: " << stream_id
-                   << ", status: " << get_changes_result.status();
+        LOG(ERROR) << "Encountered error while calling GetConsistentChanges on stream: "
+                   << stream_id << ", status: " << get_changes_result.status();
         break;
       }
 
