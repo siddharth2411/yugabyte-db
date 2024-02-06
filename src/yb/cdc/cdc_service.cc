@@ -1506,7 +1506,7 @@ void CDCServiceImpl::GetChanges(
   if (!CheckOnline(req, resp, &context)) {
     return;
   }
-  LOG(INFO) << "Received GetChanges request " << req->ShortDebugString();
+  YB_LOG_EVERY_N_SECS(INFO, 300) << "Received GetChanges request " << req->ShortDebugString();
 
   RPC_CHECK_AND_RETURN_ERROR(
       req->has_tablet_id(),
@@ -3002,9 +3002,7 @@ std::shared_ptr<CDCServiceProxy> CDCServiceImpl::GetCDCServiceProxy(RemoteTablet
 }
 
 std::shared_ptr<CDCServiceProxy> CDCServiceImpl::GetCDCServiceProxy(HostPort hostport) {
-  // auto hostport = HostPortFromPB(ts->DesiredHostPort(client()->cloud_info()));
   DCHECK(!hostport.host().empty());
-
   {
     SharedLock<decltype(mutex_)> l(mutex_);
     auto it = cdc_service_map_.find(hostport);
@@ -4538,6 +4536,7 @@ Status CDCServiceImpl::GetChangesInternal(
         tablet_queue.push_back(record);
       }
     }
+
     RSTATUS_DCHECK(
         tablet_checkpoint_map_.contains(tablet_id), InternalError,
         Format("Couldn't find entry in the tablet checkpoint map for tablet_id: ", tablet_id));
