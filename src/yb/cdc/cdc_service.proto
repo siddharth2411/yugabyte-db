@@ -169,10 +169,6 @@ message GetConsistentChangesRequestPB {
 
 message GetConsistentChangesResponsePB {
   optional CDCErrorPB error = 1;
-  // optional CDCRecordType record_type = 2 [default = CHANGE];
-  // optional CDCRecordFormat record_format = 3;
-
-  // repeated CDCSDKRecordPB cdc_sdk_records = 7;
   repeated CDCSDKProtoRecordPB cdc_sdk_proto_records = 2;
 }
 
