@@ -155,7 +155,7 @@ enum CDCCheckpointType {
 
 message InitVirtualWALForCDCRequestPB {
   optional uint64 session_id = 1;
-  optional string stream_id = 2;
+  optional bytes stream_id = 2;
   repeated string table_id = 3;
 }
 
