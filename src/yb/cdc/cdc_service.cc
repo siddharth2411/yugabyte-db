@@ -4294,8 +4294,8 @@ void CDCServiceImpl::InitVirtualWALForCDC(
 }
 
 Status CDCServiceImpl::InitVirtualWALInternal(
-    const xrepl::StreamId& stream_id, const std::unordered_set<TableId>& table_list, HostPort hostport,
-    CoarseTimePoint deadline) {
+    const xrepl::StreamId& stream_id, const std::unordered_set<TableId>& table_list,
+    HostPort hostport, CoarseTimePoint deadline) {
   for (const auto& table_id : table_list) {
     publication_table_list_.insert(table_id);
     Status s = GetTabletListAndCheckpoint(stream_id, table_id, hostport, deadline);
