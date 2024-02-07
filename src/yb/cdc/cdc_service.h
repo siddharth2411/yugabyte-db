@@ -86,6 +86,7 @@ static const char* const kStreamState = "state";
 static const char* const kNamespaceId = "NAMESPACEID";
 static const char* const kCDCSDKSnapshotDoneKey = "snapshot_done_key";
 static const int32_t kAssembledWALBufferMaxSize = 250;
+
 struct TabletCheckpoint {
   OpId op_id;
   // Timestamp at which the op ID was last updated.
@@ -121,49 +122,9 @@ using TabletIdRecordPair = std::pair<TabletId, CDCSDKProtoRecordPB>;
 
 class YbUniqueRecordID {
  public:
-  static YbUniqueRecordID GetYbUniqueRecordID(const TabletIdRecordPair& record) {
-    YbUniqueRecordID record_id;
-    record_id.op = record.second.row_message().op();
-    record_id.commit_time = record.second.row_message().commit_time();
-    if (record_id.op == RowMessage_Op_BEGIN || record_id.op == RowMessage_Op_DDL) {
-      record_id.record_time = 0;
-      record_id.write_id = 0;
-      record_id.tablet_id = "";
-    } else if (record_id.op == RowMessage_Op_COMMIT || record_id.op == RowMessage_Op_SAFEPOINT) {
-      record_id.record_time = std::numeric_limits<uint64_t>::max();
-      record_id.write_id = std::numeric_limits<uint32_t>::max();
-      record_id.tablet_id = "";
-    } else {
-      // Change record
-      record_id.record_time = record.second.row_message().record_time();
-      record_id.write_id = record.second.cdc_sdk_op_id().write_id();
-      record_id.tablet_id = record.first;
-    }
+  static YbUniqueRecordID GetYbUniqueRecordID(const TabletIdRecordPair& record);
 
-    return record_id;
-  }
-
-  bool lessThan(const YbUniqueRecordID& record) {
-    if (this->commit_time < record.commit_time) {
-      return true;
-    } else if (this->commit_time == record.commit_time) {
-      if (this->record_time < record.record_time) {
-        return true;
-      } else if (this->record_time == record.record_time) {
-        if (this->write_id < record.write_id) {
-          return true;
-        } else if (this->write_id == record.write_id) {
-          return this->tablet_id < record.tablet_id;
-        } else {
-          return false;
-        }
-      } else {
-        return false;
-      }
-    }
-
-    return false;
-  }
+  bool lessThan(const YbUniqueRecordID& record);
 
  private:
   RowMessage_Op op;
@@ -174,13 +135,11 @@ class YbUniqueRecordID {
 };
 
 struct CompareCDCSDKProtoRecords {
-  bool operator()(const TabletIdRecordPair& lhs, const TabletIdRecordPair& rhs) const {
-    auto lhs_id = YbUniqueRecordID::GetYbUniqueRecordID(lhs);
-    auto rhs_id = YbUniqueRecordID::GetYbUniqueRecordID(rhs);
-
-    return !lhs_id.lessThan(rhs_id);
-  }
+  bool operator()(const TabletIdRecordPair& lhs, const TabletIdRecordPair& rhs) const;
 };
+
+using TabletRecordPriorityQueue = std::priority_queue<
+      TabletIdRecordPair, std::vector<TabletIdRecordPair>, CompareCDCSDKProtoRecords>;
 
 using TabletIdCDCCheckpointMap = std::unordered_map<TabletId, TabletCDCCheckpointInfo>;
 using TabletIdStreamIdSet = std::set<std::pair<TabletId, xrepl::StreamId>>;
@@ -216,7 +175,7 @@ class CDCServiceImpl : public CDCServiceIf {
       GetCheckpointResponsePB* resp,
       rpc::RpcContext rpc) override;
 
-  // New Consumption RPCs
+  // Walsender StartReplication RPCs
   void InitVirtualWALForCDC(
       const InitVirtualWALForCDCRequestPB* req, InitVirtualWALForCDCResponsePB* resp,
       rpc::RpcContext context) override;
@@ -224,33 +183,6 @@ class CDCServiceImpl : public CDCServiceIf {
   void GetConsistentChanges(
       const GetConsistentChangesRequestPB* req, GetConsistentChangesResponsePB* resp,
       rpc::RpcContext context) override;
-
-  Status InitVirtualWALInternal(
-      const std::string& stream_id, const std::unordered_set<TableId>& table_list,
-      HostPort hostport, CoarseTimePoint deadline);
-
-  Status GetTabletListAndCheckpoint(
-      const std::string& stream_id, const TableId table_id, HostPort hostport,
-      CoarseTimePoint deadline, const TabletId parent_tablet_id = "");
-
-  Status GetConsistentChangesInternal(
-      const std::string& stream_id, GetConsistentChangesResponsePB* resp, HostPort hostport,
-      CoarseTimePoint deadline);
-
-  Status GetChangesInternal(
-      const std::string& stream_id, const std::unordered_set<TabletId> tablet_to_poll_list,
-      HostPort hostport, CoarseTimePoint deadline);
-
-  Result<CDCSDKProtoRecordPB> FindConsistentRecord(
-      const std::string& stream_id,
-      std::priority_queue<
-          TabletIdRecordPair, std::vector<TabletIdRecordPair>, CompareCDCSDKProtoRecords>*
-          sorted_records,
-      std::vector<TabletId>* empty_tablet_queues, HostPort hostport, CoarseTimePoint deadline);
-
-  void AddEntriesToQueue(std::priority_queue<
-                         TabletIdRecordPair, std::vector<TabletIdRecordPair>,
-                         CompareCDCSDKProtoRecords>* sorted_records);
 
   Result<TabletCheckpoint> TEST_GetTabletInfoFromCache(const TabletStreamInfo& producer_tablet);
 
@@ -573,6 +505,28 @@ class CDCServiceImpl : public CDCServiceIf {
   // when the config version does not match.
   bool ValidateAutoFlagsConfigVersion(
       const GetChangesRequestPB& req, GetChangesResponsePB& resp, rpc::RpcContext& context);
+
+  Status InitVirtualWALInternal(
+      const xrepl::StreamId& stream_id, const std::unordered_set<TableId>& table_list,
+      HostPort hostport, CoarseTimePoint deadline);
+
+  Status GetTabletListAndCheckpoint(
+      const xrepl::StreamId& stream_id, const TableId table_id, HostPort hostport,
+      CoarseTimePoint deadline, const TabletId parent_tablet_id = "");
+
+  Status GetConsistentChangesInternal(
+      const xrepl::StreamId& stream_id, GetConsistentChangesResponsePB* resp, HostPort hostport,
+      CoarseTimePoint deadline);
+
+  Status GetChangesInternal(
+      const xrepl::StreamId& stream_id, const std::unordered_set<TabletId> tablet_to_poll_list,
+      HostPort hostport, CoarseTimePoint deadline);
+
+  Result<CDCSDKProtoRecordPB> FindConsistentRecord(
+      const xrepl::StreamId& stream_id, TabletRecordPriorityQueue* sorted_records,
+      std::vector<TabletId>* empty_tablet_queues, HostPort hostport, CoarseTimePoint deadline);
+
+  Status AddEntriesToQueue(TabletRecordPriorityQueue* sorted_records);
 
   rpc::Rpcs rpcs_;
 
