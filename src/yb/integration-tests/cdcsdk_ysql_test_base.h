@@ -627,6 +627,8 @@ class CDCSDKYsqlTest : public CDCSDKTestBase {
 
   void CheckRecordsConsistency(const std::vector<CDCSDKProtoRecordPB>& records);
 
+  void CheckRecordsConsistencyWithWriteId(const std::vector<CDCSDKProtoRecordPB>& records);
+
   void GetRecordsAndSplitCount(
       const xrepl::StreamId& stream_id, const TabletId& tablet_id, const TableId& table_id,
       CDCCheckpointType checkpoint_type,
