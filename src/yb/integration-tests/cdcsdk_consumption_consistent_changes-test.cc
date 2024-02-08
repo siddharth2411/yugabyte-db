@@ -66,7 +66,7 @@ TEST_F(
     LOG(INFO) << "Count[" << i << "] = " << count[i];
   }
 
-  CheckRecordsConsistency(get_changes_resp.records);
+  CheckRecordsConsistencyWithWriteId(get_changes_resp.records);
   LOG(INFO) << "Got " << get_changes_resp.records.size() << " records.";
   for (int i = 0; i < 8; i++) {
     ASSERT_EQ(expected_count[i], count[i]);
@@ -109,7 +109,7 @@ TEST_F(
   // The count array stores counts of DDL, INSERT, UPDATE, DELETE, READ, TRUNCATE, BEGIN, COMMIT in
   // that order.
   const int expected_count[] = {
-      1 * tablets.size(),
+      tablets.size(),
       2 * num_batches * inserts_per_batch,
       0,
       0,
@@ -130,7 +130,7 @@ TEST_F(
     LOG(INFO) << "Count[" << i << "] = " << count[i];
   }
 
-  CheckRecordsConsistency(get_changes_resp.records);
+  CheckRecordsConsistencyWithWriteId(get_changes_resp.records);
   LOG(INFO) << "Got " << get_changes_resp.records.size() << " records.";
   for (int i = 0; i < 8; i++) {
     ASSERT_EQ(expected_count[i], count[i]);
@@ -202,7 +202,7 @@ TEST_F(
   // The count array stores counts of DDL, INSERT, UPDATE, DELETE, READ, TRUNCATE, BEGIN, COMMIT in
   // that order.
   const int expected_count[] = {
-      1 * tablets.size(),
+      tablets.size(),
       queries_per_batch * num_batches * 2,
       queries_per_batch * num_batches * 2,
       0,
@@ -223,7 +223,7 @@ TEST_F(
     LOG(INFO) << "Count[" << i << "] = " << count[i];
   }
 
-  CheckRecordsConsistency(get_changes_resp.records);
+  CheckRecordsConsistencyWithWriteId(get_changes_resp.records);
 
   LOG(INFO) << "Got " << get_changes_resp.records.size() << " records.";
   for (int i = 0; i < 8; i++) {
@@ -286,7 +286,7 @@ TEST_F(
     UpdateRecordCount(record, count);
   }
 
-  CheckRecordsConsistency(get_changes_resp.records);
+  CheckRecordsConsistencyWithWriteId(get_changes_resp.records);
 
   LOG(INFO) << "Got " << get_changes_resp.records.size() << " records.";
   for (int i = 0; i < 8; i++) {
@@ -360,7 +360,7 @@ TEST_F(
     UpdateRecordCount(record, count);
   }
 
-  CheckRecordsConsistency(get_changes_resp.records);
+  CheckRecordsConsistencyWithWriteId(get_changes_resp.records);
   LOG(INFO) << "Got " << get_changes_resp.records.size() << " records.";
   for (int i = 0; i < 8; i++) {
     ASSERT_EQ(expected_count[i], count[i]);
@@ -453,7 +453,7 @@ TEST_F(
     UpdateRecordCount(record, count);
   }
 
-  CheckRecordsConsistency(all_records);
+  CheckRecordsConsistencyWithWriteId(all_records);
   LOG(INFO) << "Got " << all_records.size() << " records.";
   for (int i = 0; i < 8; i++) {
     ASSERT_EQ(expected_count[i], count[i]);
@@ -533,7 +533,7 @@ TEST_F(
     UpdateRecordCount(record, count);
   }
 
-  CheckRecordsConsistency(get_changes_resp.records);
+  CheckRecordsConsistencyWithWriteId(get_changes_resp.records);
   LOG(INFO) << "Got " << get_changes_resp.records.size() << " records.";
   for (int i = 0; i < 8; i++) {
     ASSERT_EQ(expected_count[i], count[i]);
@@ -610,7 +610,7 @@ void CDCSDKConsumptionConsistentChangesTest::TestCDCSDKConsistentStreamWithTable
 
   for (auto iter = records_by_tablet.begin(); iter != records_by_tablet.end(); ++iter) {
     LOG(INFO) << "Checking records consistency for tablet " << iter->first;
-    CheckRecordsConsistency(iter->second);
+    CheckRecordsConsistencyWithWriteId(iter->second);
   }
 }
 
@@ -703,49 +703,6 @@ TEST_F(
 TEST_F(
     CDCSDKConsumptionConsistentChangesTest, YB_DISABLE_TEST_IN_TSAN(CDCSDKMultipleAlterImplicit)) {
   TestCDCSDKMultipleAlter(CDCCheckpointType::IMPLICIT);
-}
-
-// Disabled because there is no way to pass safe time to the getchanges call.
-TEST_F(
-    CDCSDKConsumptionConsistentChangesTest,
-    YB_DISABLE_TEST(TestCDCSDKConsistentStreamWithRandomReqSafeTimeChanges)) {
-  ANNOTATE_UNPROTECTED_WRITE(FLAGS_cdc_state_checkpoint_update_interval_ms) = 0;
-  ANNOTATE_UNPROTECTED_WRITE(FLAGS_cdc_stream_records_threshold_size_bytes) = 64_KB;
-  ANNOTATE_UNPROTECTED_WRITE(FLAGS_enable_load_balancing) = false;
-  ASSERT_OK(SetUpWithParams(3, 1, false, true));
-  auto table = ASSERT_RESULT(CreateTable(&test_cluster_, kNamespaceName, kTableName));
-  google::protobuf::RepeatedPtrField<master::TabletLocationsPB> tablets;
-  ASSERT_OK(test_client()->GetTablets(table, 0, &tablets, nullptr));
-  ASSERT_EQ(tablets.size(), 1);
-  auto stream_id = ASSERT_RESULT(CreateDBStreamWithReplicationSlot());
-  auto set_resp = ASSERT_RESULT(SetCDCCheckpoint(stream_id, tablets, OpId::Min()));
-  ASSERT_FALSE(set_resp.has_error());
-
-  int num_batches = 25;
-  int inserts_per_batch = 100;
-
-  std::thread t1(
-      [&]() -> void { PerformSingleAndMultiShardInserts(num_batches, inserts_per_batch, 20); });
-  std::thread t2([&]() -> void {
-    PerformSingleAndMultiShardInserts(
-        num_batches, inserts_per_batch, 50, num_batches * inserts_per_batch);
-  });
-
-  t1.join();
-  t2.join();
-
-  ASSERT_OK(test_client()->FlushTables({table.table_id()}, false, 1000, false));
-
-  auto get_changes_resp = GetAllPendingChangesWithRandomReqSafeTimeChanges(stream_id, tablets);
-  std::unordered_set<int32_t> seen_unique_pk_values;
-  for (auto record : get_changes_resp.records) {
-    if (record.row_message().op() == RowMessage::INSERT) {
-      const int32_t& pk_value = record.row_message().new_tuple(0).datum_int32();
-      seen_unique_pk_values.insert(pk_value);
-    }
-  }
-
-  ASSERT_EQ(seen_unique_pk_values.size(), 5000);
 }
 
 TEST_F(
@@ -894,7 +851,7 @@ TEST_F(CDCSDKConsumptionConsistentChangesTest, TestConsistentSnapshotWithCDCSDKC
     UpdateRecordCount(record, count);
   }
 
-  CheckRecordsConsistency(get_changes_resp.records);
+  CheckRecordsConsistencyWithWriteId(get_changes_resp.records);
   LOG(INFO) << "Got " << get_changes_resp.records.size() << " records.";
   for (int i = 0; i < 8; i++) {
     ASSERT_EQ(expected_count[i], count[i]);

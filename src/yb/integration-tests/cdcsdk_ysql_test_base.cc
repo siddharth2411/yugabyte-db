@@ -1409,7 +1409,6 @@ Result<string> CDCSDKYsqlTest::GetUniverseId(PostgresMiniCluster* cluster) {
   Status CDCSDKYsqlTest::InitVirtualWAL(
       const xrepl::StreamId& stream_id, const std::vector<TableId> table_ids) {
     InitVirtualWALForCDCRequestPB init_req;
-    InitVirtualWALForCDCResponsePB init_resp;
     init_req.set_stream_id(stream_id.ToString());
     init_req.set_session_id(1);
     for (const auto& table_id : table_ids) {
@@ -1418,23 +1417,17 @@ Result<string> CDCSDKYsqlTest::GetUniverseId(PostgresMiniCluster* cluster) {
 
     RETURN_NOT_OK(WaitFor(
         [&]() -> Result<bool> {
+          InitVirtualWALForCDCResponsePB init_resp;
           RpcController init_rpc;
           auto status = cdc_proxy_->InitVirtualWALForCDC(init_req, &init_resp, &init_rpc);
 
-          if (status.ok() && init_resp.has_error()) {
-            status = StatusFromPB(init_resp.error().status());
+          if (status.ok() && !init_resp.has_error()) {
+            return true;
           }
 
-          if ((status.IsLeaderNotReadyToServe() || status.IsNotFound())) {
-            LOG(INFO) << "Retrying InitVirtualWALForCDC in test";
-            return false;
-          }
-
-          RETURN_NOT_OK(status);
-          return true;
+          return false;
         },
-        MonoDelta::FromSeconds(kRpcTimeout),
-        "InitVirtualWal timed out waiting for Leader to get ready"));
+        MonoDelta::FromSeconds(kRpcTimeout), "InitVirtualWal failed due to RPC timeout"));
 
     return Status::OK();
   }
@@ -1443,31 +1436,26 @@ Result<string> CDCSDKYsqlTest::GetUniverseId(PostgresMiniCluster* cluster) {
       const xrepl::StreamId& stream_id, const std::vector<TableId> table_ids,
       const bool should_retry) {
     GetConsistentChangesRequestPB change_req;
-    GetConsistentChangesResponsePB change_resp;
+    GetConsistentChangesResponsePB final_resp;
     change_req.set_stream_id(stream_id.ToString());
     // Retry only on LeaderNotReadyToServe or NotFound errors
     RETURN_NOT_OK(WaitFor(
         [&]() -> Result<bool> {
+          GetConsistentChangesResponsePB change_resp;
           RpcController get_changes_rpc;
           auto status =
               cdc_proxy_->GetConsistentChanges(change_req, &change_resp, &get_changes_rpc);
 
-          if (status.ok() && change_resp.has_error()) {
-            status = StatusFromPB(change_resp.error().status());
-          }
-
-          if (should_retry && (status.IsLeaderNotReadyToServe() || status.IsNotFound())) {
-            LOG(INFO) << "Retrying GetConsistentChanges in test";
+          if (!status.ok()) {
             return false;
           }
 
-          RETURN_NOT_OK(status);
+          final_resp = change_resp;
           return true;
         },
-        MonoDelta::FromSeconds(kRpcTimeout),
-        "GetConsistentChanges timed out waiting for Leader to get ready"));
+        MonoDelta::FromSeconds(kRpcTimeout), "GetConsistentChanges failed due to RPC timeout"));
 
-    return change_resp;
+    return final_resp;
   }
 
   Result<GetChangesResponsePB> CDCSDKYsqlTest::GetChangesFromCDC(
@@ -3534,6 +3522,49 @@ Result<string> CDCSDKYsqlTest::GetUniverseId(PostgresMiniCluster* cluster) {
       default:
         ASSERT_FALSE(true);
         break;
+    }
+  }
+
+  void CDCSDKYsqlTest::CheckRecordsConsistencyWithWriteId(
+      const std::vector<CDCSDKProtoRecordPB>& records) {
+    uint64_t prev_commit_time = 0;
+    uint64_t prev_record_time = 0;
+    uint32_t prev_write_id = 0;
+    bool in_transaction = false;
+    bool first_record_in_transaction = false;
+    for (auto& record : records) {
+      if (record.row_message().op() == RowMessage::BEGIN) {
+        in_transaction = true;
+        first_record_in_transaction = true;
+        ASSERT_TRUE(record.row_message().commit_time() >= prev_commit_time);
+        prev_commit_time = record.row_message().commit_time();
+      }
+
+      if (record.row_message().op() == RowMessage::COMMIT) {
+        in_transaction = false;
+        ASSERT_TRUE(record.row_message().commit_time() >= prev_commit_time);
+        prev_commit_time = record.row_message().commit_time();
+      }
+
+      if (record.row_message().op() == RowMessage::INSERT ||
+          record.row_message().op() == RowMessage::UPDATE ||
+          record.row_message().op() == RowMessage::DELETE) {
+        ASSERT_TRUE(record.row_message().commit_time() >= prev_commit_time);
+        prev_commit_time = record.row_message().commit_time();
+
+        if (in_transaction) {
+          if (!first_record_in_transaction) {
+            ASSERT_TRUE(record.row_message().record_time() >= prev_record_time);
+            if (record.row_message().record_time() == prev_record_time) {
+              ASSERT_TRUE(record.cdc_sdk_op_id().write_id() >= prev_write_id);
+            }
+          }
+
+          first_record_in_transaction = false;
+          prev_record_time = record.row_message().record_time();
+          prev_write_id = record.cdc_sdk_op_id().write_id();
+        }
+      }
     }
   }
 

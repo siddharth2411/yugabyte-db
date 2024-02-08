@@ -85,7 +85,8 @@ static const char* const kCheckpointType = "checkpoint_type";
 static const char* const kStreamState = "state";
 static const char* const kNamespaceId = "NAMESPACEID";
 static const char* const kCDCSDKSnapshotDoneKey = "snapshot_done_key";
-static const int32_t kAssembledWALBufferMaxSize = 250;
+// TODO: This will be changed to a GFLAG in future.
+static const int32_t kConsistentChangesResponseMaxRecords = 250;
 
 struct TabletCheckpoint {
   OpId op_id;
@@ -123,6 +124,8 @@ using TabletIdRecordPair = std::pair<TabletId, CDCSDKProtoRecordPB>;
 class YbUniqueRecordID {
  public:
   static YbUniqueRecordID GetYbUniqueRecordID(const TabletIdRecordPair& record);
+
+  static bool CanFormYBUniqueRecordId(const CDCSDKProtoRecordPB& record);
 
   bool lessThan(const YbUniqueRecordID& record);
 
@@ -522,11 +525,14 @@ class CDCServiceImpl : public CDCServiceIf {
       const xrepl::StreamId& stream_id, const std::unordered_set<TabletId> tablet_to_poll_list,
       HostPort hostport, CoarseTimePoint deadline);
 
+  Status AddEntryToVirtualWalPriorityQueue(
+      TabletId table_id, TabletRecordPriorityQueue* sorted_records);
+
   Result<CDCSDKProtoRecordPB> FindConsistentRecord(
       const xrepl::StreamId& stream_id, TabletRecordPriorityQueue* sorted_records,
       std::vector<TabletId>* empty_tablet_queues, HostPort hostport, CoarseTimePoint deadline);
 
-  Status AddEntriesToQueue(TabletRecordPriorityQueue* sorted_records);
+
 
   rpc::Rpcs rpcs_;
 
@@ -589,6 +595,8 @@ class CDCServiceImpl : public CDCServiceIf {
   std::unordered_set<TabletId> tablet_list_to_poll_;
   std::unordered_map<TabletId, TabletCDCSDKCheckpointInfo> tablet_checkpoint_map_;
   std::unordered_map<TabletId, std::vector<CDCSDKProtoRecordPB>> tablet_queues_;
+  uint64_t lsn;
+  uint64_t txn_id;
 };
 
 }  // namespace cdc
