@@ -418,7 +418,7 @@ TEST_F(
   // The count array stores counts of DDL, INSERT, UPDATE, DELETE, READ, TRUNCATE, BEGIN, COMMIT in
   // that order.
   const int expected_count[] = {
-      4,
+      3, // 1 DDL without commit_time will not be received
       4 * num_batches * inserts_per_batch,
       0,
       0,
@@ -458,7 +458,7 @@ TEST_F(
   for (int i = 0; i < 8; i++) {
     ASSERT_EQ(expected_count[i], count[i]);
   }
-  ASSERT_EQ(60604, all_records.size());
+  ASSERT_EQ(60603, all_records.size());
 }
 
 TEST_F(
