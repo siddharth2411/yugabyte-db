@@ -4505,8 +4505,10 @@ Status CDCServiceImpl::GetChangesInternal(
     rpc::RpcController rpc;
     rpc.set_deadline(deadline);
     Status s = (cdc_proxy->GetChanges(req, &resp, &rpc));
+    std::string error_msg = Format("Error calling GetChanges on tablet_id: $0", tablet_id);
     if (!s.ok()) {
-      RETURN_NOT_OK_PREPEND(s, Format("Error calling GetChanges on tablet_id: $0", tablet_id));
+      LOG(WARNING) << error_msg;
+      RETURN_NOT_OK_PREPEND(s, error_msg);
     } else {
       if (resp.has_error()) {
         s = StatusFromPB(resp.error().status());
@@ -4517,13 +4519,17 @@ Status CDCServiceImpl::GetChangesInternal(
           LOG(INFO) << "Tablet split encountered on tablet_id : " << tablet_id
                     << " on table_id: " << tablet_to_table_map_[tablet_id]
                     << ". Fetching children tablets";
-          RETURN_NOT_OK_PREPEND(
-              GetTabletListAndCheckpoint(
-                  stream_id, tablet_to_table_map_[tablet_id], hostport, deadline, tablet_id),
-              Format("Error fetching children tablets for tablet_id: $0", tablet_id));
+          s = GetTabletListAndCheckpoint(
+              stream_id, tablet_to_table_map_[tablet_id], hostport, deadline, tablet_id);
+          if (!s.ok()) {
+            error_msg = Format("Error fetching children tablets for tablet_id: $0", tablet_id);
+            LOG(WARNING) << error_msg;
+            RETURN_NOT_OK_PREPEND(s, error_msg);
+          }
           continue;
         } else {
-          RETURN_NOT_OK_PREPEND(s, Format("Error calling GetChanges on tablet_id: $0", tablet_id));
+          LOG(WARNING) << error_msg;
+          RETURN_NOT_OK_PREPEND(s, error_msg);
         }
       }
     }
