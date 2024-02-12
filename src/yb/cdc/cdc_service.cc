@@ -4293,8 +4293,15 @@ void CDCServiceImpl::InitVirtualWALForCDC(
   }
 
   // TODO: This will eventually be replaced by values stored in cdc_state table for the slot.
-  lsn = 1;
-  txn_id = 1;
+  s = InitLSNAndTxnIDGenerators(stream_id);
+  if (!s.ok()) {
+    publication_table_list_.clear();
+    std::string error_msg = Format("VirtualWAL initialisation failed for stream_id: $0", stream_id);
+    LOG(WARNING) << error_msg;
+    RPC_STATUS_RETURN_ERROR(
+        s.CloneAndPrepend(error_msg), resp->mutable_error(), CDCErrorPB::INTERNAL_ERROR, context);
+    return;
+  }
 
   // TODO: Will add an entry for VirtualWAL instance against the session_id. Will be done once we
   // have the VirtualWAL class.
@@ -4310,8 +4317,8 @@ Status CDCServiceImpl::InitVirtualWALInternal(
     if (!s.ok()) {
       string error_msg =
           Format("Error fetching tablet list & checkpoints for table_id: $0", table_id);
-      LOG(WARNING) << error_msg;
-      RETURN_NOT_OK_PREPEND(s, error_msg);
+      LOG(WARNING) << s.CloneAndPrepend(error_msg).ToString();
+      RETURN_NOT_OK(s);
     }
   }
   return Status::OK();
@@ -4334,9 +4341,11 @@ Status CDCServiceImpl::GetTabletListAndCheckpoint(
   rpc.set_deadline(deadline);
   Status s = cdc_proxy->GetTabletListToPollForCDC(req, &resp, &rpc);
   if (!s.ok()) {
+    LOG(WARNING) << s.ToString();
     RETURN_NOT_OK(s);
   } else {
     if (resp.has_error()) {
+      LOG(WARNING) << StatusFromPB(resp.error().status()).ToString();
       RETURN_NOT_OK(StatusFromPB(resp.error().status()));
     } else {
       if (!parent_tablet_id.empty() && resp.tablet_checkpoint_pairs_size() != 2) {
@@ -4438,7 +4447,8 @@ Status CDCServiceImpl::GetConsistentChangesInternal(
     RETURN_NOT_OK(GetChangesInternal(stream_id, tablet_to_poll_list, hostport, deadline));
   }
 
-  // Recheck tablet queues map to account for new tablet queues created after tablet splits.
+  // Recheck tablet queues map to account for new tablet queues that might be created after tablet
+  // splits.
   tablet_to_poll_list.clear();
   for (const auto& tablet_queue : tablet_queues_) {
     auto tablet_id = tablet_queue.first;
@@ -4455,23 +4465,33 @@ Status CDCServiceImpl::GetConsistentChangesInternal(
   TabletRecordPriorityQueue sorted_records;
   std::vector<TabletId> empty_tablet_queues;
   for (const auto& entry : tablet_queues_) {
-    RETURN_NOT_OK(AddEntryToVirtualWalPriorityQueue(entry.first, &sorted_records));
+    Status s = AddEntryToVirtualWalPriorityQueue(entry.first, &sorted_records);
+    if (!s.ok()) {
+      LOG(WARNING) << "Couldnt add entries to the VirtualWAL Queue for stream_id: " << stream_id
+                   << " and tablet_id: " << entry.first;
+      RETURN_NOT_OK(s);
+    }
   }
 
   while (resp->cdc_sdk_proto_records_size() < kConsistentChangesResponseMaxRecords &&
          !sorted_records.empty() && empty_tablet_queues.size() == 0) {
     auto next_record = VERIFY_RESULT(
         FindConsistentRecord(stream_id, &sorted_records, &empty_tablet_queues, hostport, deadline));
-    if (next_record.row_message().op() == RowMessage_Op_SAFEPOINT) {
+    auto unique_id = next_record.first;
+    auto record = next_record.second;
+    if (record.row_message().op() == RowMessage_Op_SAFEPOINT) {
       continue;
     }
-    auto row_message = next_record.mutable_row_message();
-    // TODO: Replace assigning LSN & TxnID via respective generators.
-    row_message->set_pg_lsn(lsn);
-    row_message->set_pg_transaction_id(txn_id);
-    lsn += 1;
-    auto records = resp->add_cdc_sdk_proto_records();
-    records->CopyFrom(next_record);
+    auto row_message = record.mutable_row_message();
+    auto lsn_result = GetRecordLSN(unique_id);
+    auto txn_id_result = GetRecordTxnID(unique_id);
+    if (lsn_result.ok() && txn_id_result.ok()) {
+      row_message->set_pg_lsn(*lsn_result);
+      row_message->set_pg_transaction_id(*txn_id_result);
+      last_unique_record_id_ = unique_id;
+      auto records = resp->add_cdc_sdk_proto_records();
+      records->CopyFrom(record);
+    }
   }
 
   return Status::OK();
@@ -4507,8 +4527,8 @@ Status CDCServiceImpl::GetChangesInternal(
     Status s = (cdc_proxy->GetChanges(req, &resp, &rpc));
     std::string error_msg = Format("Error calling GetChanges on tablet_id: $0", tablet_id);
     if (!s.ok()) {
-      LOG(WARNING) << error_msg;
-      RETURN_NOT_OK_PREPEND(s, error_msg);
+      LOG(WARNING) << s.CloneAndPrepend(error_msg).ToString();
+      RETURN_NOT_OK(s);
     } else {
       if (resp.has_error()) {
         s = StatusFromPB(resp.error().status());
@@ -4523,13 +4543,13 @@ Status CDCServiceImpl::GetChangesInternal(
               stream_id, tablet_to_table_map_[tablet_id], hostport, deadline, tablet_id);
           if (!s.ok()) {
             error_msg = Format("Error fetching children tablets for tablet_id: $0", tablet_id);
-            LOG(WARNING) << error_msg;
-            RETURN_NOT_OK_PREPEND(s, error_msg);
+            LOG(WARNING) << s.CloneAndPrepend(error_msg).ToString();
+            RETURN_NOT_OK(s);
           }
           continue;
         } else {
-          LOG(WARNING) << error_msg;
-          RETURN_NOT_OK_PREPEND(s, error_msg);
+          LOG(WARNING) << s.CloneAndPrepend(error_msg).ToString();
+          RETURN_NOT_OK(s);
         }
       }
     }
@@ -4564,15 +4584,19 @@ Status CDCServiceImpl::AddEntryToVirtualWalPriorityQueue(
   auto tablet_queue = &tablet_queues_[tablet_id];
   while (true) {
     if (tablet_queue->empty()) {
-      LOG(WARNING) << "Tablet queue is empty for tablet_id: " << tablet_id;
       return STATUS_FORMAT(
           InternalError, Format("Tablet queue is empty for tablet_id: $0", tablet_id));
     }
     auto record = tablet_queue->front();
-    TabletIdRecordPair record_pair = {tablet_id, record};
+    // TODO: Remove this check once we add support for streaming DDL records.
+    if (record.row_message().op() == RowMessage_Op_DDL) {
+      tablet_queue->erase(tablet_queue->begin());
+      continue;
+    }
     bool result = YbUniqueRecordID::CanFormYBUniqueRecordId(record);
     if (result) {
-      sorted_records->push(record_pair);
+      auto unique_id = YbUniqueRecordID::GetYbUniqueRecordID(tablet_id, record);
+      sorted_records->push({tablet_id, {unique_id, record}});
       break;
     } else {
       DCHECK_EQ(record.row_message().op(), RowMessage_Op_DDL);
@@ -4582,11 +4606,12 @@ Status CDCServiceImpl::AddEntryToVirtualWalPriorityQueue(
   return Status::OK();
 }
 
-Result<CDCSDKProtoRecordPB> CDCServiceImpl::FindConsistentRecord(
+Result<RecordIdToRecord> CDCServiceImpl::FindConsistentRecord(
     const xrepl::StreamId& stream_id, TabletRecordPriorityQueue* sorted_records,
     std::vector<TabletId>* empty_tablet_queues, HostPort hostport, CoarseTimePoint deadline) {
-  auto record = sorted_records->top();
-  auto tablet_id = record.first;
+  auto record_info = sorted_records->top();
+  auto tablet_id = record_info.first;
+  auto record_id_to_record = record_info.second;
   sorted_records->pop();
   tablet_queues_[tablet_id].erase(tablet_queues_[tablet_id].begin());
 
@@ -4596,13 +4621,35 @@ Result<CDCSDKProtoRecordPB> CDCServiceImpl::FindConsistentRecord(
     empty_tablet_queues->push_back(tablet_id);
   }
 
-  return record.second;
+  return record_id_to_record;
 }
 
-bool CompareCDCSDKProtoRecords::operator()(
-    const TabletIdRecordPair& lhs, const TabletIdRecordPair& rhs) const {
-  auto lhs_id = YbUniqueRecordID::GetYbUniqueRecordID(lhs);
-  auto rhs_id = YbUniqueRecordID::GetYbUniqueRecordID(rhs);
+Result<uint64_t> CDCServiceImpl::GetRecordLSN(const YbUniqueRecordID& record_id) {
+  if (last_unique_record_id_.lessThan(record_id)) {
+    lsn += 1;
+    return lsn;
+  }
+
+  return STATUS_FORMAT(InternalError, "RecordID is less than or equal to last seen RecordID");
+}
+
+Result<uint64_t> CDCServiceImpl::GetRecordTxnID(const YbUniqueRecordID& record_id) {
+  if (last_unique_record_id_.GetCommitTime() < record_id.GetCommitTime()) {
+    txn_id += 1;
+    return txn_id;
+  } else if (last_unique_record_id_.GetCommitTime() == record_id.GetCommitTime()) {
+    return txn_id;
+  }
+
+  std::string error_msg =
+      "Unexpected record! Record's commit_time is lesser than last seen record.";
+  LOG(WARNING) << error_msg;
+  return STATUS_FORMAT(InternalError, error_msg);
+}
+
+bool CompareCDCSDKProtoRecords::operator()(const RecordInfo& lhs, const RecordInfo& rhs) const {
+  auto lhs_id = lhs.second.first;
+  auto rhs_id = rhs.second.first;
 
   return !lhs_id.lessThan(rhs_id);
 }
@@ -4638,10 +4685,11 @@ bool YbUniqueRecordID::CanFormYBUniqueRecordId(const CDCSDKProtoRecordPB& record
   return false;
 }
 
-YbUniqueRecordID YbUniqueRecordID::GetYbUniqueRecordID(const TabletIdRecordPair& record) {
+YbUniqueRecordID YbUniqueRecordID::GetYbUniqueRecordID(
+    const TabletId& tablet_id, const CDCSDKProtoRecordPB& record) {
   YbUniqueRecordID record_id;
-  record_id.op = record.second.row_message().op();
-  record_id.commit_time = record.second.row_message().commit_time();
+  record_id.op = record.row_message().op();
+  record_id.commit_time = record.row_message().commit_time();
   switch (record_id.op) {
     case RowMessage_Op_DDL:
       FALLTHROUGH_INTENDED;
@@ -4662,9 +4710,9 @@ YbUniqueRecordID YbUniqueRecordID::GetYbUniqueRecordID(const TabletIdRecordPair&
     case RowMessage_Op_DELETE:
       FALLTHROUGH_INTENDED;
     case RowMessage_Op_UPDATE:
-      record_id.record_time = record.second.row_message().record_time();
-      record_id.write_id = record.second.cdc_sdk_op_id().write_id();
-      record_id.tablet_id = record.first;
+      record_id.record_time = record.row_message().record_time();
+      record_id.write_id = record.cdc_sdk_op_id().write_id();
+      record_id.tablet_id = tablet_id;
       break;
     default:
       break;
@@ -4693,6 +4741,19 @@ bool YbUniqueRecordID::lessThan(const YbUniqueRecordID& record) {
   }
 
   return false;
+}
+
+uint64_t YbUniqueRecordID::GetCommitTime() const { return commit_time; }
+
+Status CDCServiceImpl::InitLSNAndTxnIDGenerators(const xrepl::StreamId& stream_id) {
+  // TODO: This shall be replaced by commit_time of the consistent point that will be stored in the
+  // cdc_state table.
+  last_unique_record_id_ = YbUniqueRecordID(
+      0, std::numeric_limits<uint64_t>::max(), "", std::numeric_limits<uint32_t>::max());
+  lsn = 1;
+  txn_id = 1;
+
+  return Status::OK();
 }
 
 }  // namespace cdc

@@ -86,7 +86,7 @@ static const char* const kStreamState = "state";
 static const char* const kNamespaceId = "NAMESPACEID";
 static const char* const kCDCSDKSnapshotDoneKey = "snapshot_done_key";
 // TODO: This will be changed to a GFLAG in future.
-static const int32_t kConsistentChangesResponseMaxRecords = 250;
+static const int32_t kConsistentChangesResponseMaxRecords = 500;
 
 struct TabletCheckpoint {
   OpId op_id;
@@ -119,30 +119,43 @@ struct TabletCDCSDKCheckpointInfo {
   int32_t wal_segment_index;
 };
 
-using TabletIdRecordPair = std::pair<TabletId, CDCSDKProtoRecordPB>;
-
 class YbUniqueRecordID {
  public:
-  static YbUniqueRecordID GetYbUniqueRecordID(const TabletIdRecordPair& record);
+  YbUniqueRecordID() = default;
+  explicit YbUniqueRecordID(
+      uint64_t commit_time, uint64_t record_time, std::string tablet_id, int32_t write_id) {
+    this->op = RowMessage_Op_UNKNOWN;
+    this->commit_time = commit_time;
+    this->record_time = record_time;
+    this->tablet_id = tablet_id;
+    this->write_id = write_id;
+  }
+  static YbUniqueRecordID GetYbUniqueRecordID(
+      const TabletId& tablet_id, const CDCSDKProtoRecordPB& record);
 
   static bool CanFormYBUniqueRecordId(const CDCSDKProtoRecordPB& record);
 
   bool lessThan(const YbUniqueRecordID& record);
+
+  uint64_t GetCommitTime() const;
 
  private:
   RowMessage_Op op;
   uint64_t commit_time;
   uint64_t record_time;
   std::string tablet_id;
-  int32_t write_id;
+  uint32_t write_id;
 };
 
+using RecordIdToRecord = std::pair<YbUniqueRecordID, CDCSDKProtoRecordPB>;
+using RecordInfo = std::pair<TabletId, RecordIdToRecord>;
+
 struct CompareCDCSDKProtoRecords {
-  bool operator()(const TabletIdRecordPair& lhs, const TabletIdRecordPair& rhs) const;
+  bool operator()(const RecordInfo& lhs, const RecordInfo& rhs) const;
 };
 
 using TabletRecordPriorityQueue = std::priority_queue<
-      TabletIdRecordPair, std::vector<TabletIdRecordPair>, CompareCDCSDKProtoRecords>;
+      RecordInfo, std::vector<RecordInfo>, CompareCDCSDKProtoRecords>;
 
 using TabletIdCDCCheckpointMap = std::unordered_map<TabletId, TabletCDCCheckpointInfo>;
 using TabletIdStreamIdSet = std::set<std::pair<TabletId, xrepl::StreamId>>;
@@ -526,13 +539,17 @@ class CDCServiceImpl : public CDCServiceIf {
       HostPort hostport, CoarseTimePoint deadline);
 
   Status AddEntryToVirtualWalPriorityQueue(
-      TabletId table_id, TabletRecordPriorityQueue* sorted_records);
+      TabletId tablet_id, TabletRecordPriorityQueue* sorted_records);
 
-  Result<CDCSDKProtoRecordPB> FindConsistentRecord(
+  Result<RecordIdToRecord> FindConsistentRecord(
       const xrepl::StreamId& stream_id, TabletRecordPriorityQueue* sorted_records,
       std::vector<TabletId>* empty_tablet_queues, HostPort hostport, CoarseTimePoint deadline);
 
+  Status InitLSNAndTxnIDGenerators(const xrepl::StreamId& stream_id);
 
+  Result<uint64_t> GetRecordLSN(const YbUniqueRecordID& record_id);
+
+  Result<uint64_t> GetRecordTxnID(const YbUniqueRecordID& record_id);
 
   rpc::Rpcs rpcs_;
 
@@ -590,6 +607,7 @@ class CDCServiceImpl : public CDCServiceIf {
 
   uint32_t xcluster_config_version_ GUARDED_BY(mutex_) = 0;
 
+// TODO: These fields will eventually move to per VirtualWAL.
   std::unordered_set<TableId> publication_table_list_;
   std::unordered_map<TabletId, TableId> tablet_to_table_map_;
   std::unordered_set<TabletId> tablet_list_to_poll_;
@@ -597,6 +615,7 @@ class CDCServiceImpl : public CDCServiceIf {
   std::unordered_map<TabletId, std::vector<CDCSDKProtoRecordPB>> tablet_queues_;
   uint64_t lsn;
   uint64_t txn_id;
+  YbUniqueRecordID last_unique_record_id_;
 };
 
 }  // namespace cdc
