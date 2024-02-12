@@ -1806,6 +1806,58 @@ Result<string> CDCSDKYsqlTest::GetUniverseId(PostgresMiniCluster* cluster) {
   }
 
   CDCSDKYsqlTest::GetAllPendingChangesResponse CDCSDKYsqlTest::GetAllPendingChangesFromCdc(
+      const xrepl::StreamId& stream_id, std::vector<TableId> table_ids, int expected_dml_records,
+      bool init_virtual_wal) {
+    GetAllPendingChangesResponse resp;
+    if (init_virtual_wal) {
+      Status s = InitVirtualWAL(stream_id, table_ids);
+      if (!s.ok()) {
+        LOG(INFO) << "Error while trying to initialize virtual WAL";
+        return resp;
+      }
+    }
+
+    // The count array stores counts of DDL, INSERT, UPDATE, DELETE, READ, TRUNCATE, BEGIN, COMMIT
+    // in
+    // that order.
+    int count[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+    int begin_records = 0;
+    int commit_records = 0;
+    int dml_records = 0;
+    do {
+      GetConsistentChangesResponsePB change_resp;
+      auto get_changes_result = GetConsistentChangesFromCDC(stream_id, table_ids, true);
+
+      if (get_changes_result.ok()) {
+        change_resp = *get_changes_result;
+      } else {
+        LOG(ERROR) << "Encountered error while calling GetConsistentChanges on stream: "
+                   << stream_id << ", status: " << get_changes_result.status();
+        break;
+      }
+
+      for (int i = 0; i < change_resp.cdc_sdk_proto_records_size(); i++) {
+        resp.records.push_back(change_resp.cdc_sdk_proto_records(i));
+        UpdateRecordCount(change_resp.cdc_sdk_proto_records(i), count);
+      }
+
+      begin_records = count[6];
+      commit_records = count[7];
+      dml_records =
+          count[1] + count[2] + count[3] + count[5];  // INSERT + UPDATE + DELETE + TRUNCATE
+      LOG(INFO) << "Total Received records for stream " << resp.records.size();
+    } while (dml_records < expected_dml_records || commit_records < begin_records);
+
+    LOG(INFO) << "Record count array: ";
+    for (int i = 0; i < 8; i++) {
+      LOG(INFO) << "Count[" << i << "] = " << count[i];
+      resp.record_count[i] = count[i];
+    }
+
+    return resp;
+  }
+
+  CDCSDKYsqlTest::GetAllPendingChangesResponse CDCSDKYsqlTest::GetAllPendingChangesFromCdc(
       const xrepl::StreamId& stream_id, std::vector<TableId> table_ids, bool init_virtual_wal) {
     GetAllPendingChangesResponse resp;
     if (init_virtual_wal) {
@@ -3525,32 +3577,68 @@ Result<string> CDCSDKYsqlTest::GetUniverseId(PostgresMiniCluster* cluster) {
     }
   }
 
+  void CDCSDKYsqlTest::CheckRecordCount(
+      GetAllPendingChangesResponse resp, int expected_dml_records) {
+    // The record count array in GetAllPendingChangesResponse stores counts of DDL, INSERT, UPDATE,
+    // DELETE, READ, TRUNCATE, BEGIN, COMMIT in that order.
+    int dml_records =
+        resp.record_count[1] + resp.record_count[2] + resp.record_count[3] + resp.record_count[5];
+    ASSERT_EQ(dml_records, expected_dml_records);
+
+    // last record received should be a COMMIT.
+    ASSERT_EQ(resp.records.back().row_message().op(), RowMessage::COMMIT);
+
+    // Number of BEGIN & COMMIT should be equal to the txn_id of last received record (i.e COMMIT) -
+    // 1 since assignment of txn_id starts from 2 onwards.
+    auto last_txn_id = resp.records.back().row_message().pg_transaction_id() - 1;
+    int begin_records = resp.record_count[6];
+    int commit_records = resp.record_count[7];
+    ASSERT_EQ(begin_records, last_txn_id);
+    ASSERT_EQ(commit_records, last_txn_id);
+  }
+
   void CDCSDKYsqlTest::CheckRecordsConsistencyWithWriteId(
       const std::vector<CDCSDKProtoRecordPB>& records) {
     uint64_t prev_commit_time = 0;
     uint64_t prev_record_time = 0;
     uint32_t prev_write_id = 0;
+    uint64_t prev_lsn = 0;
+    uint64_t prev_txn_id = 0;
     bool in_transaction = false;
     bool first_record_in_transaction = false;
     for (auto& record : records) {
       if (record.row_message().op() == RowMessage::BEGIN) {
         in_transaction = true;
         first_record_in_transaction = true;
-        ASSERT_TRUE(record.row_message().commit_time() >= prev_commit_time);
+        // BEGIN record should have strictly > commit_time than prev record' commit_time. Same
+        // follows for PG txn_id.
+        ASSERT_TRUE(record.row_message().commit_time() > prev_commit_time);
+        ASSERT_TRUE(record.row_message().pg_lsn() > prev_lsn);
+        ASSERT_TRUE(record.row_message().pg_transaction_id() > prev_txn_id);
         prev_commit_time = record.row_message().commit_time();
+        prev_lsn = record.row_message().pg_lsn();
+        prev_txn_id = record.row_message().pg_transaction_id();
       }
 
       if (record.row_message().op() == RowMessage::COMMIT) {
         in_transaction = false;
         ASSERT_TRUE(record.row_message().commit_time() >= prev_commit_time);
+        ASSERT_TRUE(record.row_message().pg_lsn() > prev_lsn);
+        // PG txn_id should be same as the BEGIN record of the current txn.
+        ASSERT_TRUE(record.row_message().pg_transaction_id() == prev_txn_id);
         prev_commit_time = record.row_message().commit_time();
+        prev_lsn = record.row_message().pg_lsn();
       }
 
       if (record.row_message().op() == RowMessage::INSERT ||
           record.row_message().op() == RowMessage::UPDATE ||
           record.row_message().op() == RowMessage::DELETE) {
         ASSERT_TRUE(record.row_message().commit_time() >= prev_commit_time);
+        ASSERT_TRUE(record.row_message().pg_lsn() > prev_lsn);
+        // PG txn_id should be same as the BEGIN record of the current txn.
+        ASSERT_TRUE(record.row_message().pg_transaction_id() == prev_txn_id);
         prev_commit_time = record.row_message().commit_time();
+        prev_lsn = record.row_message().pg_lsn();
 
         if (in_transaction) {
           if (!first_record_in_transaction) {

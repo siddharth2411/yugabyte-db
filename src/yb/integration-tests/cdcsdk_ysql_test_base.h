@@ -181,6 +181,9 @@ class CDCSDKYsqlTest : public CDCSDKTestBase {
 
   struct GetAllPendingChangesResponse {
     vector<CDCSDKProtoRecordPB> records;
+    // The record count array stores counts of DDL, INSERT, UPDATE, DELETE, READ, TRUNCATE, BEGIN,
+    // COMMIT in that order.
+    int record_count[8];
     CDCSDKCheckpointPB checkpoint;
     int64 safe_hybrid_time = -1;
   };
@@ -482,6 +485,10 @@ class CDCSDKYsqlTest : public CDCSDKTestBase {
       bool init_virtual_wal = true);
 
   GetAllPendingChangesResponse GetAllPendingChangesFromCdc(
+      const xrepl::StreamId& stream_id, std::vector<TableId> table_ids, int expected_records,
+      bool init_virtual_wal);
+
+  GetAllPendingChangesResponse GetAllPendingChangesFromCdc(
       const xrepl::StreamId& stream_id,
       const google::protobuf::RepeatedPtrField<master::TabletLocationsPB>& tablets,
       const CDCSDKCheckpointPB* cp = nullptr,
@@ -626,6 +633,8 @@ class CDCSDKYsqlTest : public CDCSDKTestBase {
   void UpdateRecordCount(const CDCSDKProtoRecordPB& record, int* record_count);
 
   void CheckRecordsConsistency(const std::vector<CDCSDKProtoRecordPB>& records);
+
+  void CheckRecordCount(GetAllPendingChangesResponse resp, int expected_dml_records);
 
   void CheckRecordsConsistencyWithWriteId(const std::vector<CDCSDKProtoRecordPB>& records);
 
