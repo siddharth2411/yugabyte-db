@@ -164,7 +164,8 @@ message InitVirtualWALForCDCResponsePB {
 }
 
 message GetConsistentChangesRequestPB {
-  optional bytes stream_id = 1;
+  optional uint64 session_id = 1;
+  optional bytes stream_id = 2;
 }
 
 message GetConsistentChangesResponsePB {
@@ -241,7 +242,7 @@ message CDCCheckpointPB {
 }
 
 enum CDCSDKRequestSource {
-  DEBEZIUM = 1;
+  YB_DEBEZIUM_CONNECTOR = 1;
   WALSENDER = 2;
 }
 
@@ -279,7 +280,7 @@ message GetChangesRequestPB {
   // Used only in xCluster streams.
   optional uint32 auto_flags_config_version = 13;
 
-  optional CDCSDKRequestSource cdcsdk_request_source = 14 [default = DEBEZIUM];
+  optional CDCSDKRequestSource cdcsdk_request_source = 14 [default = YB_DEBEZIUM_CONNECTOR];
 }
 
 message KeyValuePairPB {
@@ -448,7 +449,7 @@ message RowMessage {
   optional yb.tserver.TruncateRequestPB truncate_request_info = 13;
   optional uint64 record_time = 14;
   optional uint64 pg_lsn = 15;
-  optional uint64 pg_transaction_id = 16;
+  optional uint32 pg_transaction_id = 16;
 }
 
 message CDCSDKProtoRecordPB {

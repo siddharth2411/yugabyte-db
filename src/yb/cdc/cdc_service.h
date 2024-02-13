@@ -121,33 +121,26 @@ struct TabletCDCSDKCheckpointInfo {
 
 class YbUniqueRecordID {
  public:
-  YbUniqueRecordID() = default;
+  explicit YbUniqueRecordID(const TabletId& tablet_id, const CDCSDKProtoRecordPB& record);
   explicit YbUniqueRecordID(
-      uint64_t commit_time, uint64_t record_time, std::string tablet_id, int32_t write_id) {
-    this->op = RowMessage_Op_UNKNOWN;
-    this->commit_time = commit_time;
-    this->record_time = record_time;
-    this->tablet_id = tablet_id;
-    this->write_id = write_id;
-  }
-  static YbUniqueRecordID GetYbUniqueRecordID(
-      const TabletId& tablet_id, const CDCSDKProtoRecordPB& record);
+      RowMessage_Op op, uint64_t commit_time, uint64_t record_time, std::string tablet_id,
+      uint32_t write_id);
 
   static bool CanFormYBUniqueRecordId(const CDCSDKProtoRecordPB& record);
 
-  bool lessThan(const YbUniqueRecordID& record);
+  bool lessThan(const std::shared_ptr<YbUniqueRecordID>& record);
 
   uint64_t GetCommitTime() const;
 
  private:
-  RowMessage_Op op;
-  uint64_t commit_time;
-  uint64_t record_time;
-  std::string tablet_id;
-  uint32_t write_id;
+  RowMessage_Op op_;
+  uint64_t commit_time_;
+  uint64_t record_time_;
+  std::string tablet_id_;
+  uint32_t write_id_;
 };
 
-using RecordIdToRecord = std::pair<YbUniqueRecordID, CDCSDKProtoRecordPB>;
+using RecordIdToRecord = std::pair<std::shared_ptr<YbUniqueRecordID>, CDCSDKProtoRecordPB>;
 using RecordInfo = std::pair<TabletId, RecordIdToRecord>;
 
 struct CompareCDCSDKProtoRecords {
@@ -547,9 +540,9 @@ class CDCServiceImpl : public CDCServiceIf {
 
   Status InitLSNAndTxnIDGenerators(const xrepl::StreamId& stream_id);
 
-  Result<uint64_t> GetRecordLSN(const YbUniqueRecordID& record_id);
+  Result<uint64_t> GetRecordLSN(const std::shared_ptr<YbUniqueRecordID>& record_id);
 
-  Result<uint64_t> GetRecordTxnID(const YbUniqueRecordID& record_id);
+  Result<uint32_t> GetRecordTxnID(const std::shared_ptr<YbUniqueRecordID>& record_id);
 
   rpc::Rpcs rpcs_;
 
@@ -607,15 +600,15 @@ class CDCServiceImpl : public CDCServiceIf {
 
   uint32_t xcluster_config_version_ GUARDED_BY(mutex_) = 0;
 
-// TODO: These fields will eventually move to per VirtualWAL.
+  // TODO: These fields will eventually move to per VirtualWAL.
   std::unordered_set<TableId> publication_table_list_;
   std::unordered_map<TabletId, TableId> tablet_to_table_map_;
   std::unordered_set<TabletId> tablet_list_to_poll_;
   std::unordered_map<TabletId, TabletCDCSDKCheckpointInfo> tablet_checkpoint_map_;
   std::unordered_map<TabletId, std::vector<CDCSDKProtoRecordPB>> tablet_queues_;
   uint64_t lsn;
-  uint64_t txn_id;
-  YbUniqueRecordID last_unique_record_id_;
+  uint32_t txn_id;
+  std::shared_ptr<YbUniqueRecordID> last_unique_record_id_;
 };
 
 }  // namespace cdc

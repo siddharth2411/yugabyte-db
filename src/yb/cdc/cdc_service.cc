@@ -3001,6 +3001,7 @@ std::shared_ptr<CDCServiceProxy> CDCServiceImpl::GetCDCServiceProxy(RemoteTablet
   return cdc_service;
 }
 
+// TODO(20946): This will be removed once change RPC calls to local function calls.
 std::shared_ptr<CDCServiceProxy> CDCServiceImpl::GetCDCServiceProxy(HostPort hostport) {
   DCHECK(!hostport.host().empty());
   {
@@ -4292,17 +4293,6 @@ void CDCServiceImpl::InitVirtualWALForCDC(
     return;
   }
 
-  // TODO: This will eventually be replaced by values stored in cdc_state table for the slot.
-  s = InitLSNAndTxnIDGenerators(stream_id);
-  if (!s.ok()) {
-    publication_table_list_.clear();
-    std::string error_msg = Format("VirtualWAL initialisation failed for stream_id: $0", stream_id);
-    LOG(WARNING) << error_msg;
-    RPC_STATUS_RETURN_ERROR(
-        s.CloneAndPrepend(error_msg), resp->mutable_error(), CDCErrorPB::INTERNAL_ERROR, context);
-    return;
-  }
-
   // TODO: Will add an entry for VirtualWAL instance against the session_id. Will be done once we
   // have the VirtualWAL class.
   context.RespondSuccess();
@@ -4315,11 +4305,19 @@ Status CDCServiceImpl::InitVirtualWALInternal(
     publication_table_list_.insert(table_id);
     Status s = GetTabletListAndCheckpoint(stream_id, table_id, hostport, deadline);
     if (!s.ok()) {
-      string error_msg =
+      std::string error_msg =
           Format("Error fetching tablet list & checkpoints for table_id: $0", table_id);
       LOG(WARNING) << s.CloneAndPrepend(error_msg).ToString();
       RETURN_NOT_OK(s);
     }
+  }
+
+  Status s = InitLSNAndTxnIDGenerators(stream_id);
+  if (!s.ok()) {
+    std::string error_msg =
+        Format("Init LSN & TxnID generators failed for stream_id: $0", stream_id);
+    LOG(WARNING) << error_msg;
+    RETURN_NOT_OK(s);
   }
   return Status::OK();
 }
@@ -4411,6 +4409,11 @@ void CDCServiceImpl::GetConsistentChanges(
   if (!CheckOnline(req, resp, &context)) {
     return;
   }
+
+  RPC_CHECK_AND_RETURN_ERROR(
+      req->has_session_id(),
+      STATUS(InvalidArgument, "Session ID is required for GetConsistentChanges"),
+      resp->mutable_error(), CDCErrorPB::INVALID_REQUEST, context);
 
   RPC_CHECK_AND_RETURN_ERROR(
       req->has_stream_id(), STATUS(InvalidArgument, "Stream ID is required for GetChanges"),
@@ -4595,7 +4598,7 @@ Status CDCServiceImpl::AddEntryToVirtualWalPriorityQueue(
     }
     bool result = YbUniqueRecordID::CanFormYBUniqueRecordId(record);
     if (result) {
-      auto unique_id = YbUniqueRecordID::GetYbUniqueRecordID(tablet_id, record);
+      auto unique_id = std::make_shared<YbUniqueRecordID>(YbUniqueRecordID(tablet_id, record));
       sorted_records->push({tablet_id, {unique_id, record}});
       break;
     } else {
@@ -4624,8 +4627,20 @@ Result<RecordIdToRecord> CDCServiceImpl::FindConsistentRecord(
   return record_id_to_record;
 }
 
-Result<uint64_t> CDCServiceImpl::GetRecordLSN(const YbUniqueRecordID& record_id) {
-  if (last_unique_record_id_.lessThan(record_id)) {
+Status CDCServiceImpl::InitLSNAndTxnIDGenerators(const xrepl::StreamId& stream_id) {
+  // TODO: This shall be replaced by commit_time of the consistent point that will be stored in the
+  // cdc_state table.
+  last_unique_record_id_ = std::make_shared<YbUniqueRecordID>(YbUniqueRecordID(
+      RowMessage::UNKNOWN, 0, std::numeric_limits<uint64_t>::max(), "",
+      std::numeric_limits<uint32_t>::max()));
+  lsn = 1;
+  txn_id = 1;
+
+  return Status::OK();
+}
+
+Result<uint64_t> CDCServiceImpl::GetRecordLSN(const std::shared_ptr<YbUniqueRecordID>& record_id) {
+  if (last_unique_record_id_->lessThan(record_id)) {
     lsn += 1;
     return lsn;
   }
@@ -4633,11 +4648,12 @@ Result<uint64_t> CDCServiceImpl::GetRecordLSN(const YbUniqueRecordID& record_id)
   return STATUS_FORMAT(InternalError, "RecordID is less than or equal to last seen RecordID");
 }
 
-Result<uint64_t> CDCServiceImpl::GetRecordTxnID(const YbUniqueRecordID& record_id) {
-  if (last_unique_record_id_.GetCommitTime() < record_id.GetCommitTime()) {
+Result<uint32_t> CDCServiceImpl::GetRecordTxnID(
+    const std::shared_ptr<YbUniqueRecordID>& record_id) {
+  if (last_unique_record_id_->GetCommitTime() < record_id->GetCommitTime()) {
     txn_id += 1;
     return txn_id;
-  } else if (last_unique_record_id_.GetCommitTime() == record_id.GetCommitTime()) {
+  } else if (last_unique_record_id_->GetCommitTime() == record_id->GetCommitTime()) {
     return txn_id;
   }
 
@@ -4651,87 +4667,87 @@ bool CompareCDCSDKProtoRecords::operator()(const RecordInfo& lhs, const RecordIn
   auto lhs_id = lhs.second.first;
   auto rhs_id = rhs.second.first;
 
-  return !lhs_id.lessThan(rhs_id);
+  return !lhs_id->lessThan(rhs_id);
 }
+
+YbUniqueRecordID::YbUniqueRecordID(const TabletId& tablet_id, const CDCSDKProtoRecordPB& record) {
+  this->op_ = record.row_message().op();
+  this->commit_time_ = record.row_message().commit_time();
+  switch (this->op_) {
+    case RowMessage_Op_DDL: FALLTHROUGH_INTENDED;
+    case RowMessage_Op_BEGIN:
+      this->record_time_ = 0;
+      this->write_id_ = 0;
+      this->tablet_id_ = "";
+      break;
+    case RowMessage_Op_SAFEPOINT: FALLTHROUGH_INTENDED;
+    case RowMessage_Op_COMMIT:
+      this->record_time_ = std::numeric_limits<uint64_t>::max();
+      this->write_id_ = std::numeric_limits<uint32_t>::max();
+      this->tablet_id_ = "";
+      break;
+    case RowMessage_Op_INSERT: FALLTHROUGH_INTENDED;
+    case RowMessage_Op_DELETE: FALLTHROUGH_INTENDED;
+    case RowMessage_Op_UPDATE:
+      this->record_time_ = record.row_message().record_time();
+      this->write_id_ = record.cdc_sdk_op_id().write_id();
+      this->tablet_id_ = tablet_id;
+      break;
+    default:
+      DLOG(FATAL) << "Unexpected record received in Tablet Queue for tablet_id: " << tablet_id
+                  << "Record:" << record.DebugString();
+  }
+}
+
+YbUniqueRecordID::YbUniqueRecordID(
+    RowMessage_Op op, uint64_t commit_time, uint64_t record_time, std::string tablet_id,
+    uint32_t write_id)
+    : op_(op),
+      commit_time_(commit_time),
+      record_time_(record_time),
+      tablet_id_(tablet_id),
+      write_id_(write_id) {}
 
 bool YbUniqueRecordID::CanFormYBUniqueRecordId(const CDCSDKProtoRecordPB& record) {
   RowMessage_Op op = record.row_message().op();
   switch (op) {
-    case RowMessage_Op_DDL:
-      FALLTHROUGH_INTENDED;
-    case RowMessage_Op_BEGIN:
-      FALLTHROUGH_INTENDED;
-    case RowMessage_Op_COMMIT:
-      FALLTHROUGH_INTENDED;
+    case RowMessage_Op_DDL: FALLTHROUGH_INTENDED;
+    case RowMessage_Op_BEGIN: FALLTHROUGH_INTENDED;
+    case RowMessage_Op_COMMIT: FALLTHROUGH_INTENDED;
     case RowMessage_Op_SAFEPOINT:
       if (record.row_message().has_commit_time()) {
         return true;
       }
       break;
-    case RowMessage_Op_INSERT:
-      FALLTHROUGH_INTENDED;
-    case RowMessage_Op_DELETE:
-      FALLTHROUGH_INTENDED;
+    case RowMessage_Op_INSERT: FALLTHROUGH_INTENDED;
+    case RowMessage_Op_DELETE: FALLTHROUGH_INTENDED;
     case RowMessage_Op_UPDATE:
       if (record.row_message().has_commit_time() && record.row_message().has_record_time() &&
           record.cdc_sdk_op_id().has_write_id()) {
         return true;
       }
       break;
-    default:
+    case RowMessage_Op_TRUNCATE: FALLTHROUGH_INTENDED;
+    case RowMessage_Op_READ: FALLTHROUGH_INTENDED;
+    case RowMessage_Op_UNKNOWN:
       return false;
+      break;
   }
 
   return false;
 }
 
-YbUniqueRecordID YbUniqueRecordID::GetYbUniqueRecordID(
-    const TabletId& tablet_id, const CDCSDKProtoRecordPB& record) {
-  YbUniqueRecordID record_id;
-  record_id.op = record.row_message().op();
-  record_id.commit_time = record.row_message().commit_time();
-  switch (record_id.op) {
-    case RowMessage_Op_DDL:
-      FALLTHROUGH_INTENDED;
-    case RowMessage_Op_BEGIN:
-      record_id.record_time = 0;
-      record_id.write_id = 0;
-      record_id.tablet_id = "";
-      break;
-    case RowMessage_Op_SAFEPOINT:
-      FALLTHROUGH_INTENDED;
-    case RowMessage_Op_COMMIT:
-      record_id.record_time = std::numeric_limits<uint64_t>::max();
-      record_id.write_id = std::numeric_limits<uint32_t>::max();
-      record_id.tablet_id = "";
-      break;
-    case RowMessage_Op_INSERT:
-      FALLTHROUGH_INTENDED;
-    case RowMessage_Op_DELETE:
-      FALLTHROUGH_INTENDED;
-    case RowMessage_Op_UPDATE:
-      record_id.record_time = record.row_message().record_time();
-      record_id.write_id = record.cdc_sdk_op_id().write_id();
-      record_id.tablet_id = tablet_id;
-      break;
-    default:
-      break;
-  }
-
-  return record_id;
-}
-
-bool YbUniqueRecordID::lessThan(const YbUniqueRecordID& record) {
-  if (this->commit_time < record.commit_time) {
+bool YbUniqueRecordID::lessThan(const std::shared_ptr<YbUniqueRecordID>& record) {
+  if (this->commit_time_ < record->commit_time_) {
     return true;
-  } else if (this->commit_time == record.commit_time) {
-    if (this->record_time < record.record_time) {
+  } else if (this->commit_time_ == record->commit_time_) {
+    if (this->record_time_ < record->record_time_) {
       return true;
-    } else if (this->record_time == record.record_time) {
-      if (this->write_id < record.write_id) {
+    } else if (this->record_time_ == record->record_time_) {
+      if (this->write_id_ < record->write_id_) {
         return true;
-      } else if (this->write_id == record.write_id) {
-        return this->tablet_id < record.tablet_id;
+      } else if (this->write_id_ == record->write_id_) {
+        return this->tablet_id_ < record->tablet_id_;
       } else {
         return false;
       }
@@ -4743,18 +4759,7 @@ bool YbUniqueRecordID::lessThan(const YbUniqueRecordID& record) {
   return false;
 }
 
-uint64_t YbUniqueRecordID::GetCommitTime() const { return commit_time; }
-
-Status CDCServiceImpl::InitLSNAndTxnIDGenerators(const xrepl::StreamId& stream_id) {
-  // TODO: This shall be replaced by commit_time of the consistent point that will be stored in the
-  // cdc_state table.
-  last_unique_record_id_ = YbUniqueRecordID(
-      0, std::numeric_limits<uint64_t>::max(), "", std::numeric_limits<uint32_t>::max());
-  lsn = 1;
-  txn_id = 1;
-
-  return Status::OK();
-}
+uint64_t YbUniqueRecordID::GetCommitTime() const { return commit_time_; }
 
 }  // namespace cdc
 }  // namespace yb
