@@ -41,8 +41,6 @@ TEST_F(
       "INSERT INTO test_table ($0, $1) select i, i+1 from generate_series(1,1000) as i",
       kKeyColumnName, kValueColumnName));
 
-  ASSERT_OK(test_client()->FlushTables({table.table_id()}, false, 1000, false));
-
   int expected_dml_records = 1000;
   auto get_consistent_changes_resp =
       GetAllPendingChangesFromCdc(stream_id, {table.table_id()}, expected_dml_records, true);
@@ -77,8 +75,6 @@ TEST_F(
 
   t1.join();
   t2.join();
-
-  ASSERT_OK(test_client()->FlushTables({table.table_id()}, false, 1000, false));
 
   int expected_dml_records = 2 * num_batches * inserts_per_batch;
   auto get_consistent_changes_resp =
@@ -142,9 +138,6 @@ TEST_F(
 
   t3.join();
   t4.join();
-
-  ASSERT_OK(test_client()->FlushTables({table1.table_id()}, false, 1000, false));
-  ASSERT_OK(test_client()->FlushTables({table2.table_id()}, false, 1000, false));
 
   int expected_dml_records = 2 * (2 * num_batches * queries_per_batch);
   auto get_consistent_changes_resp =
@@ -255,9 +248,6 @@ TEST_F(
   t3.join();
   t4.join();
 
-  ASSERT_OK(test_client()->FlushTables({table1.table_id()}, false, 1000, false));
-  ASSERT_OK(test_client()->FlushTables({table2.table_id()}, false, 1000, false));
-
   int expected_dml_records = 4 * num_batches * inserts_per_batch;
   vector<TableId> table_ids = {table1.table_id(), table2.table_id()};
   auto get_consistent_changes_resp =
@@ -363,7 +353,6 @@ TEST_F(
 
   // Commit another transaction while we still have the previous one open.
   ASSERT_OK(WriteRowsHelper(100, 200, &test_cluster_, true));
-  ASSERT_OK(test_client()->FlushTables({table.table_id()}, false, 1000, false));
 
   uint32 seen_insert_records = 0;
   auto update_insert_count = [&](const GetConsistentChangesResponsePB& change_resp) {
