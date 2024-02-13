@@ -26,7 +26,7 @@ TEST_F(
     CDCSDKConsumptionConsistentChangesTest,
     YB_DISABLE_TEST_IN_TSAN(TestCDCSDKConsistentStreamWithGenerateSeries)) {
   ANNOTATE_UNPROTECTED_WRITE(FLAGS_cdc_max_stream_intent_records) = 40;
-  ANNOTATE_UNPROTECTED_WRITE(fLU64::FLAGS_cdc_stream_records_threshold_size_bytes) = 1_KB;
+  ANNOTATE_UNPROTECTED_WRITE(fLU64::FLAGS_cdc_stream_records_threshold_size_bytes) = 10_KB;
   ANNOTATE_UNPROTECTED_WRITE(fLB::FLAGS_yb_enable_cdc_consistent_snapshot_streams) = true;
   ASSERT_OK(SetUpWithParams(3, 1, false, true));
   auto table = ASSERT_RESULT(CreateTable(&test_cluster_, kNamespaceName, kTableName, 3));
@@ -38,12 +38,12 @@ TEST_F(
 
   auto conn = ASSERT_RESULT(test_cluster_.ConnectToDB(kNamespaceName));
   ASSERT_OK(conn.ExecuteFormat(
-      "INSERT INTO test_table ($0, $1) select i, i+1 from generate_series(1,15) as i",
+      "INSERT INTO test_table ($0, $1) select i, i+1 from generate_series(1,1000) as i",
       kKeyColumnName, kValueColumnName));
 
   ASSERT_OK(test_client()->FlushTables({table.table_id()}, false, 1000, false));
 
-  int expected_dml_records = 15;
+  int expected_dml_records = 1000;
   auto get_consistent_changes_resp =
       GetAllPendingChangesFromCdc(stream_id, {table.table_id()}, expected_dml_records, true);
   LOG(INFO) << "Got " << get_consistent_changes_resp.records.size() << " records.";
@@ -378,10 +378,10 @@ TEST_F(
   // running transaction holds back the consistent_safe_time.
   ASSERT_OK(InitVirtualWAL(stream_id, {table.table_id()}));
   GetConsistentChangesResponsePB change_resp =
-      ASSERT_RESULT(GetConsistentChangesFromCDC(stream_id, {table.table_id()}, true));
+      ASSERT_RESULT(GetConsistentChangesFromCDC(stream_id, {table.table_id()}));
   update_insert_count(change_resp);
   ASSERT_EQ(seen_insert_records, 0);
-  change_resp = ASSERT_RESULT(GetConsistentChangesFromCDC(stream_id, {table.table_id()}, true));
+  change_resp = ASSERT_RESULT(GetConsistentChangesFromCDC(stream_id, {table.table_id()}));
   update_insert_count(change_resp);
   ASSERT_EQ(seen_insert_records, 0);
 
@@ -389,9 +389,7 @@ TEST_F(
   // the committed transaction.
   ASSERT_OK(WaitFor(
       [&]() -> Result<bool> {
-        LOG(INFO) << "Sid: calling getchanges while waiting";
-        change_resp =
-            VERIFY_RESULT(GetConsistentChangesFromCDC(stream_id, {table.table_id()}, true));
+        change_resp = VERIFY_RESULT(GetConsistentChangesFromCDC(stream_id, {table.table_id()}));
         update_insert_count(change_resp);
         if (seen_insert_records == 100) return true;
 

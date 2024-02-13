@@ -1433,12 +1433,12 @@ Result<string> CDCSDKYsqlTest::GetUniverseId(PostgresMiniCluster* cluster) {
   }
 
   Result<GetConsistentChangesResponsePB> CDCSDKYsqlTest::GetConsistentChangesFromCDC(
-      const xrepl::StreamId& stream_id, const std::vector<TableId> table_ids,
-      const bool should_retry) {
+      const xrepl::StreamId& stream_id, const std::vector<TableId> table_ids) {
     GetConsistentChangesRequestPB change_req;
     GetConsistentChangesResponsePB final_resp;
     change_req.set_stream_id(stream_id.ToString());
-    // Retry only on LeaderNotReadyToServe or NotFound errors
+    change_req.set_session_id(1);
+
     RETURN_NOT_OK(WaitFor(
         [&]() -> Result<bool> {
           GetConsistentChangesResponsePB change_resp;
@@ -1539,69 +1539,6 @@ Result<string> CDCSDKYsqlTest::GetUniverseId(PostgresMiniCluster* cluster) {
         "GetChanges timed out waiting for Leader to get ready"));
 
     return change_resp;
-  }
-
-  Result<int64> CDCSDKYsqlTest::GetChangeRecordCount(
-      const xrepl::StreamId& stream_id, const std::vector<TableId> table_ids,
-      const int64 expected_total_records, bool should_retry) {
-    InitVirtualWALForCDCRequestPB init_req;
-    InitVirtualWALForCDCResponsePB init_resp;
-    init_req.set_stream_id(stream_id.ToString());
-    init_req.set_session_id(1);
-    for (const auto& table_id : table_ids) {
-      init_req.add_table_id(table_id);
-    }
-
-    RETURN_NOT_OK(WaitFor(
-        [&]() -> Result<bool> {
-          RpcController init_rpc;
-          auto status = cdc_proxy_->InitVirtualWALForCDC(init_req, &init_resp, &init_rpc);
-
-          if (status.ok() && init_resp.has_error()) {
-            status = StatusFromPB(init_resp.error().status());
-          }
-
-          if (should_retry && (status.IsLeaderNotReadyToServe() || status.IsNotFound())) {
-            LOG(INFO) << "Retrying InitVirtualWALForCDC in test";
-            return false;
-          }
-
-          RETURN_NOT_OK(status);
-          return true;
-        },
-        MonoDelta::FromSeconds(kRpcTimeout),
-        "InitVirtualWal timed out"));
-
-    int64 total_record_count = 0;
-
-    RETURN_NOT_OK(WaitFor(
-        [&]() -> Result<bool> {
-          rpc::RpcController get_changes_rpc;
-          GetConsistentChangesRequestPB change_req;
-          change_req.set_stream_id(stream_id.ToString());
-          GetConsistentChangesResponsePB change_resp;
-
-          auto status =
-              cdc_proxy_->GetConsistentChanges(change_req, &change_resp, &get_changes_rpc);
-
-          if (status.ok() && !change_resp.has_error()) {
-            // Process the records here
-            LOG(INFO) << "Received consistent records size: "
-                      << change_resp.cdc_sdk_proto_records_size();
-            for (auto record : change_resp.cdc_sdk_proto_records()) {
-              if (IsDMLRecord(record)) {
-                ++total_record_count;
-              }
-            }
-          }
-
-          LOG(INFO) << "Total records consumed so far: " << total_record_count;
-
-          return total_record_count >= expected_total_records;
-        },
-        MonoDelta::FromSeconds(600), "Timed out while fetching the changes"));
-
-    return total_record_count;
   }
 
   Result<int64> CDCSDKYsqlTest::GetChangeRecordCount(
@@ -1826,7 +1763,7 @@ Result<string> CDCSDKYsqlTest::GetUniverseId(PostgresMiniCluster* cluster) {
     int dml_records = 0;
     do {
       GetConsistentChangesResponsePB change_resp;
-      auto get_changes_result = GetConsistentChangesFromCDC(stream_id, table_ids, true);
+      auto get_changes_result = GetConsistentChangesFromCDC(stream_id, table_ids);
 
       if (get_changes_result.ok()) {
         change_resp = *get_changes_result;
@@ -1853,39 +1790,6 @@ Result<string> CDCSDKYsqlTest::GetUniverseId(PostgresMiniCluster* cluster) {
       LOG(INFO) << "Count[" << i << "] = " << count[i];
       resp.record_count[i] = count[i];
     }
-
-    return resp;
-  }
-
-  CDCSDKYsqlTest::GetAllPendingChangesResponse CDCSDKYsqlTest::GetAllPendingChangesFromCdc(
-      const xrepl::StreamId& stream_id, std::vector<TableId> table_ids, bool init_virtual_wal) {
-    GetAllPendingChangesResponse resp;
-    if (init_virtual_wal) {
-      Status s = InitVirtualWAL(stream_id, table_ids);
-      if (!s.ok()) {
-        LOG(INFO) << "Error while trying to initialize virtual WAL";
-        return resp;
-      }
-    }
-
-    int prev_records = 0;
-    do {
-      GetConsistentChangesResponsePB change_resp;
-      auto get_changes_result = GetConsistentChangesFromCDC(stream_id, table_ids, true);
-
-      if (get_changes_result.ok()) {
-        change_resp = *get_changes_result;
-      } else {
-        LOG(ERROR) << "Encountered error while calling GetConsistentChanges on stream: "
-                   << stream_id << ", status: " << get_changes_result.status();
-        break;
-      }
-
-      for (int i = 0; i < change_resp.cdc_sdk_proto_records_size(); i++) {
-        resp.records.push_back(change_resp.cdc_sdk_proto_records(i));
-      }
-      prev_records = change_resp.cdc_sdk_proto_records_size();
-    } while (prev_records != 0);
 
     return resp;
   }
@@ -2485,17 +2389,6 @@ Result<string> CDCSDKYsqlTest::GetUniverseId(PostgresMiniCluster* cluster) {
     return *row->cdc_sdk_safe_time;
   }
 
-  void CDCSDKYsqlTest::ValidateColumnCounts(
-      const GetConsistentChangesResponsePB& resp, uint32_t excepted_column_counts) {
-    uint32_t record_size = resp.cdc_sdk_proto_records_size();
-    for (uint32_t idx = 0; idx < record_size; idx++) {
-      const CDCSDKProtoRecordPB record = resp.cdc_sdk_proto_records(idx);
-      if (record.row_message().op() == RowMessage::INSERT) {
-        ASSERT_EQ(record.row_message().new_tuple_size(), excepted_column_counts);
-      }
-    }
-  }
-
   void CDCSDKYsqlTest::ValidateColumnCounts(const GetChangesResponsePB& resp,
     uint32_t excepted_column_counts) {
     uint32_t record_size = resp.cdc_sdk_proto_records_size();
@@ -2505,19 +2398,6 @@ Result<string> CDCSDKYsqlTest::GetUniverseId(PostgresMiniCluster* cluster) {
         ASSERT_EQ(record.row_message().new_tuple_size(), excepted_column_counts);
       }
     }
-  }
-
-  void CDCSDKYsqlTest::ValidateInsertCounts(
-      const GetConsistentChangesResponsePB& resp, uint32_t excepted_insert_counts) {
-    uint32_t record_size = resp.cdc_sdk_proto_records_size();
-    uint32_t insert_count = 0;
-    for (uint32_t idx = 0; idx < record_size; idx++) {
-      const CDCSDKProtoRecordPB record = resp.cdc_sdk_proto_records(idx);
-      if (record.row_message().op() == RowMessage::INSERT) {
-        insert_count += 1;
-      }
-    }
-    ASSERT_EQ(insert_count, excepted_insert_counts);
   }
 
   void CDCSDKYsqlTest::ValidateInsertCounts(const GetChangesResponsePB& resp,
