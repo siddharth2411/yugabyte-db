@@ -85,8 +85,6 @@ static const char* const kCheckpointType = "checkpoint_type";
 static const char* const kStreamState = "state";
 static const char* const kNamespaceId = "NAMESPACEID";
 static const char* const kCDCSDKSnapshotDoneKey = "snapshot_done_key";
-// TODO: This will be changed to a GFLAG in future.
-static const int32_t kConsistentChangesResponseMaxRecords = 500;
 
 struct TabletCheckpoint {
   OpId op_id;

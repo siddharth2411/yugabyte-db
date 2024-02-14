@@ -183,7 +183,9 @@ DEFINE_RUNTIME_bool(enable_xcluster_stat_collection, true,
 DEFINE_RUNTIME_uint32(cdcsdk_tablet_not_of_interest_timeout_secs, 4 * 60 * 60,
                       "Timeout after which it can be inferred that tablet is not of interest "
                       "for the stream");
-
+DEFINE_RUNTIME_int32(cdcsdk_max_consistent_records, 500,
+                      "Controls the maximum number of records sent in GetConsistentChanges "
+                      "response");
 DECLARE_bool(enable_log_retention_by_op_idx);
 
 DECLARE_int32(cdc_checkpoint_opid_interval_ms);
@@ -4476,7 +4478,7 @@ Status CDCServiceImpl::GetConsistentChangesInternal(
     }
   }
 
-  while (resp->cdc_sdk_proto_records_size() < kConsistentChangesResponseMaxRecords &&
+  while (resp->cdc_sdk_proto_records_size() < FLAGS_cdcsdk_max_consistent_records &&
          !sorted_records.empty() && empty_tablet_queues.size() == 0) {
     auto next_record = VERIFY_RESULT(
         FindConsistentRecord(stream_id, &sorted_records, &empty_tablet_queues, hostport, deadline));
@@ -4513,7 +4515,6 @@ Status CDCServiceImpl::GetChangesInternal(
     const TabletCDCSDKCheckpointInfo& info = tablet_checkpoint_map_[tablet_id];
     req.set_stream_id(stream_id.ToString());
     req.set_tablet_id(tablet_id);
-    req.set_cdcsdk_request_source(cdc::CDCSDKRequestSource::WALSENDER);
     req.set_safe_hybrid_time(info.safe_hybrid_time);
     req.set_wal_segment_index(info.wal_segment_index);
 

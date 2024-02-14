@@ -241,11 +241,6 @@ message CDCCheckpointPB {
   optional OpIdPB op_id = 1;
 }
 
-enum CDCSDKRequestSource {
-  YB_DEBEZIUM_CONNECTOR = 1;
-  WALSENDER = 2;
-}
-
 message GetChangesRequestPB {
   optional bytes stream_id = 1;
   // Tablet to get the changes for.
@@ -279,8 +274,6 @@ message GetChangesRequestPB {
 
   // Used only in xCluster streams.
   optional uint32 auto_flags_config_version = 13;
-
-  optional CDCSDKRequestSource cdcsdk_request_source = 14 [default = YB_DEBEZIUM_CONNECTOR];
 }
 
 message KeyValuePairPB {
