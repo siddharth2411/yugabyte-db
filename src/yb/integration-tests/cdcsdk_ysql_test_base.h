@@ -139,6 +139,7 @@ DECLARE_uint32(cdcsdk_tablet_not_of_interest_timeout_secs);
 DECLARE_uint32(cdcsdk_retention_barrier_no_revision_interval_secs);
 DECLARE_bool(TEST_cdcsdk_skip_processing_dynamic_table_addition);
 DECLARE_int32(TEST_user_ddl_operation_timeout_sec);
+DECLARE_int32(cdcsdk_max_consistent_records);
 
 namespace yb {
 
@@ -476,7 +477,7 @@ class CDCSDKYsqlTest : public CDCSDKTestBase {
 
   Status InitVirtualWAL(const xrepl::StreamId& stream_id, const std::vector<TableId> table_ids);
 
-  GetAllPendingChangesResponse GetAllPendingChangesFromCdc(
+  Result<GetAllPendingChangesResponse> GetAllPendingChangesFromCdc(
       const xrepl::StreamId& stream_id, std::vector<TableId> table_ids, int expected_records,
       bool init_virtual_wal);
 

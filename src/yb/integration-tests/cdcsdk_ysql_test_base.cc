@@ -1742,7 +1742,7 @@ Result<string> CDCSDKYsqlTest::GetUniverseId(PostgresMiniCluster* cluster) {
     return resp;
   }
 
-  CDCSDKYsqlTest::GetAllPendingChangesResponse CDCSDKYsqlTest::GetAllPendingChangesFromCdc(
+  Result<CDCSDKYsqlTest::GetAllPendingChangesResponse> CDCSDKYsqlTest::GetAllPendingChangesFromCdc(
       const xrepl::StreamId& stream_id, std::vector<TableId> table_ids, int expected_dml_records,
       bool init_virtual_wal) {
     GetAllPendingChangesResponse resp;
@@ -1750,40 +1750,46 @@ Result<string> CDCSDKYsqlTest::GetUniverseId(PostgresMiniCluster* cluster) {
       Status s = InitVirtualWAL(stream_id, table_ids);
       if (!s.ok()) {
         LOG(INFO) << "Error while trying to initialize virtual WAL";
-        return resp;
+        RETURN_NOT_OK(s);
       }
     }
 
     // The count array stores counts of DDL, INSERT, UPDATE, DELETE, READ, TRUNCATE, BEGIN, COMMIT
-    // in
-    // that order.
+    // in that order.
     int count[8] = {0, 0, 0, 0, 0, 0, 0, 0};
     int begin_records = 0;
     int commit_records = 0;
     int dml_records = 0;
-    do {
-      GetConsistentChangesResponsePB change_resp;
-      auto get_changes_result = GetConsistentChangesFromCDC(stream_id, table_ids);
+    RETURN_NOT_OK(WaitFor(
+        [&]() -> Result<bool> {
+          GetConsistentChangesResponsePB change_resp;
+          auto get_changes_result = GetConsistentChangesFromCDC(stream_id, table_ids);
 
-      if (get_changes_result.ok()) {
-        change_resp = *get_changes_result;
-      } else {
-        LOG(ERROR) << "Encountered error while calling GetConsistentChanges on stream: "
-                   << stream_id << ", status: " << get_changes_result.status();
-        break;
-      }
+          if (get_changes_result.ok()) {
+            change_resp = *get_changes_result;
+          } else {
+            LOG(ERROR) << "Encountered error while calling GetConsistentChanges on stream: "
+                       << stream_id << ", status: " << get_changes_result.status();
+          }
 
-      for (int i = 0; i < change_resp.cdc_sdk_proto_records_size(); i++) {
-        resp.records.push_back(change_resp.cdc_sdk_proto_records(i));
-        UpdateRecordCount(change_resp.cdc_sdk_proto_records(i), count);
-      }
+          for (int i = 0; i < change_resp.cdc_sdk_proto_records_size(); i++) {
+            resp.records.push_back(change_resp.cdc_sdk_proto_records(i));
+            UpdateRecordCount(change_resp.cdc_sdk_proto_records(i), count);
+          }
 
-      begin_records = count[6];
-      commit_records = count[7];
-      dml_records =
-          count[1] + count[2] + count[3] + count[5];  // INSERT + UPDATE + DELETE + TRUNCATE
-      LOG(INFO) << "Total Received records for stream " << resp.records.size();
-    } while (dml_records < expected_dml_records || commit_records < begin_records);
+          begin_records = count[6];
+          commit_records = count[7];
+          dml_records =
+              count[1] + count[2] + count[3] + count[5];  // INSERT + UPDATE + DELETE + TRUNCATE
+          LOG(INFO) << "Total Received records for stream " << resp.records.size();
+
+          if (dml_records < expected_dml_records || commit_records < begin_records) {
+            return false;
+          }
+
+          return true;
+        },
+        MonoDelta::FromSeconds(300), "Didnt receive expected records within time"));
 
     LOG(INFO) << "Record count array: ";
     for (int i = 0; i < 8; i++) {

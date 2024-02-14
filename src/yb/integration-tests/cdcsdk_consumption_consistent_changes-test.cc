@@ -28,6 +28,7 @@ TEST_F(
   ANNOTATE_UNPROTECTED_WRITE(FLAGS_cdc_max_stream_intent_records) = 40;
   ANNOTATE_UNPROTECTED_WRITE(fLU64::FLAGS_cdc_stream_records_threshold_size_bytes) = 10_KB;
   ANNOTATE_UNPROTECTED_WRITE(fLB::FLAGS_yb_enable_cdc_consistent_snapshot_streams) = true;
+  ANNOTATE_UNPROTECTED_WRITE(fLI::FLAGS_cdcsdk_max_consistent_records) = 250;
   ASSERT_OK(SetUpWithParams(3, 1, false, true));
   auto table = ASSERT_RESULT(CreateTable(&test_cluster_, kNamespaceName, kTableName, 3));
   google::protobuf::RepeatedPtrField<master::TabletLocationsPB> tablets;
@@ -42,8 +43,8 @@ TEST_F(
       kKeyColumnName, kValueColumnName));
 
   int expected_dml_records = 1000;
-  auto get_consistent_changes_resp =
-      GetAllPendingChangesFromCdc(stream_id, {table.table_id()}, expected_dml_records, true);
+  auto get_consistent_changes_resp = ASSERT_RESULT(
+      GetAllPendingChangesFromCdc(stream_id, {table.table_id()}, expected_dml_records, true));
   LOG(INFO) << "Got " << get_consistent_changes_resp.records.size() << " records.";
 
   CheckRecordsConsistencyWithWriteId(get_consistent_changes_resp.records);
@@ -77,8 +78,8 @@ TEST_F(
   t2.join();
 
   int expected_dml_records = 2 * num_batches * inserts_per_batch;
-  auto get_consistent_changes_resp =
-      GetAllPendingChangesFromCdc(stream_id, {table.table_id()}, expected_dml_records, true);
+  auto get_consistent_changes_resp = ASSERT_RESULT(
+      GetAllPendingChangesFromCdc(stream_id, {table.table_id()}, expected_dml_records, true));
   LOG(INFO) << "Got " << get_consistent_changes_resp.records.size() << " records.";
 
   CheckRecordsConsistencyWithWriteId(get_consistent_changes_resp.records);
@@ -140,8 +141,8 @@ TEST_F(
   t4.join();
 
   int expected_dml_records = 2 * (2 * num_batches * queries_per_batch);
-  auto get_consistent_changes_resp =
-      GetAllPendingChangesFromCdc(stream_id, {table2.table_id()}, expected_dml_records, true);
+  auto get_consistent_changes_resp = ASSERT_RESULT(
+      GetAllPendingChangesFromCdc(stream_id, {table2.table_id()}, expected_dml_records, true));
   LOG(INFO) << "Got " << get_consistent_changes_resp.records.size() << " records.";
 
   CheckRecordsConsistencyWithWriteId(get_consistent_changes_resp.records);
@@ -191,8 +192,8 @@ TEST_F(
   ASSERT_OK(conn.Execute("END"));
 
   int expected_dml_records = 29;
-  auto get_consistent_changes_resp =
-      GetAllPendingChangesFromCdc(stream_id, {table.table_id()}, expected_dml_records, true);
+  auto get_consistent_changes_resp = ASSERT_RESULT(
+      GetAllPendingChangesFromCdc(stream_id, {table.table_id()}, expected_dml_records, true));
   LOG(INFO) << "Got " << get_consistent_changes_resp.records.size() << " records.";
 
   CheckRecordsConsistencyWithWriteId(get_consistent_changes_resp.records);
@@ -251,7 +252,7 @@ TEST_F(
   int expected_dml_records = 4 * num_batches * inserts_per_batch;
   vector<TableId> table_ids = {table1.table_id(), table2.table_id()};
   auto get_consistent_changes_resp =
-      GetAllPendingChangesFromCdc(stream_id, table_ids, expected_dml_records, true);
+      ASSERT_RESULT(GetAllPendingChangesFromCdc(stream_id, table_ids, expected_dml_records, true));
   LOG(INFO) << "Got " << get_consistent_changes_resp.records.size() << " records.";
 
   CheckRecordsConsistencyWithWriteId(get_consistent_changes_resp.records);
@@ -314,8 +315,8 @@ void CDCSDKConsumptionConsistentChangesTest::TestCDCSDKConsistentStreamWithTable
   ASSERT_EQ(tablets_after_first_split.size(), 4);
 
   int expected_dml_records = 4 * num_batches * inserts_per_batch;
-  auto get_consistent_changes_resp =
-      GetAllPendingChangesFromCdc(stream_id, {table.table_id()}, expected_dml_records, true);
+  auto get_consistent_changes_resp = ASSERT_RESULT(
+      GetAllPendingChangesFromCdc(stream_id, {table.table_id()}, expected_dml_records, true));
   LOG(INFO) << "Got " << get_consistent_changes_resp.records.size() << " records.";
 
   CheckRecordsConsistencyWithWriteId(get_consistent_changes_resp.records);
@@ -333,6 +334,7 @@ TEST_F(
     YB_DISABLE_TEST_IN_TSAN(TestCDCSDKMakesProgressWithLongRunningTxn)) {
   ANNOTATE_UNPROTECTED_WRITE(FLAGS_yb_enable_cdc_consistent_snapshot_streams) = true;
   ANNOTATE_UNPROTECTED_WRITE(FLAGS_cdc_resolve_intent_lag_threshold_ms) = 10 * 1000;
+  ANNOTATE_UNPROTECTED_WRITE(fLI::FLAGS_cdcsdk_max_consistent_records) = 100;
   ASSERT_OK(SetUpWithParams(3, 1, false));
   auto table = ASSERT_RESULT(CreateTable(&test_cluster_, kNamespaceName, kTableName, 3));
   TableId table_id = ASSERT_RESULT(GetTableId(&test_cluster_, kNamespaceName, kTableName));
@@ -352,7 +354,7 @@ TEST_F(
   }
 
   // Commit another transaction while we still have the previous one open.
-  ASSERT_OK(WriteRowsHelper(100, 200, &test_cluster_, true));
+  ASSERT_OK(WriteRowsHelper(100, 600, &test_cluster_, true));
 
   uint32 seen_insert_records = 0;
   auto update_insert_count = [&](const GetConsistentChangesResponsePB& change_resp) {
@@ -374,22 +376,22 @@ TEST_F(
   update_insert_count(change_resp);
   ASSERT_EQ(seen_insert_records, 0);
 
+  vector<CDCSDKProtoRecordPB> records;
   // Eventually, after FLAGS_cdc_resolve_intent_lag_threshold_ms time we should see the records for
   // the committed transaction.
   ASSERT_OK(WaitFor(
       [&]() -> Result<bool> {
         change_resp = VERIFY_RESULT(GetConsistentChangesFromCDC(stream_id, {table.table_id()}));
         update_insert_count(change_resp);
-        if (seen_insert_records == 100) return true;
+        for (const auto& record : change_resp.cdc_sdk_proto_records()) {
+          records.push_back(record);
+        }
+        if (seen_insert_records == 500) return true;
 
         return false;
       },
-      MonoDelta::FromSeconds(30), "Did not see all expected records"));
+      MonoDelta::FromSeconds(60), "Did not see all expected records"));
 
-  vector<CDCSDKProtoRecordPB> records;
-  for (const auto& record : change_resp.cdc_sdk_proto_records()) {
-    records.push_back(record);
-  }
   CheckRecordsConsistencyWithWriteId(records);
 }
 
@@ -397,6 +399,7 @@ TEST_F(CDCSDKConsumptionConsistentChangesTest, TestConsistentSnapshotWithCDCSDKC
   google::SetVLOGLevel("cdc*", 0);
   ANNOTATE_UNPROTECTED_WRITE(FLAGS_yb_enable_cdc_consistent_snapshot_streams) = true;
   ANNOTATE_UNPROTECTED_WRITE(FLAGS_cdc_max_stream_intent_records) = 40;
+  ANNOTATE_UNPROTECTED_WRITE(fLI::FLAGS_cdcsdk_max_consistent_records) = 100;
   auto tablets = ASSERT_RESULT(SetUpCluster());
   auto table = ASSERT_RESULT(GetTable(&test_cluster_, kNamespaceName, kTableName));
   ASSERT_OK(WriteRows(1 /* start */, 201 /* end */, &test_cluster_));
@@ -455,8 +458,8 @@ TEST_F(CDCSDKConsumptionConsistentChangesTest, TestConsistentSnapshotWithCDCSDKC
   ASSERT_EQ(reads_snapshot, 200);
 
   int expected_dml_records = 2 * num_batches * inserts_per_batch;
-  auto get_consistent_changes_resp =
-      GetAllPendingChangesFromCdc(stream_id, {table.table_id()}, expected_dml_records, true);
+  auto get_consistent_changes_resp = ASSERT_RESULT(
+      GetAllPendingChangesFromCdc(stream_id, {table.table_id()}, expected_dml_records, true));
   LOG(INFO) << "Got " << get_consistent_changes_resp.records.size() << " records.";
 
   CheckRecordsConsistencyWithWriteId(get_consistent_changes_resp.records);
