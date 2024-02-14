@@ -4398,7 +4398,7 @@ Status CDCServiceImpl::GetTabletListAndCheckpoint(
 
     if (!tablet_queues_.contains(tablet_id)) {
       VLOG(2) << "Adding tablet queue for tablet_id: " << tablet_id;
-      tablet_queues_[tablet_id] = std::vector<CDCSDKProtoRecordPB>();
+      tablet_queues_[tablet_id] = std::vector<std::shared_ptr<CDCSDKProtoRecordPB>>();
     }
   }
 
@@ -4484,10 +4484,10 @@ Status CDCServiceImpl::GetConsistentChangesInternal(
         FindConsistentRecord(stream_id, &sorted_records, &empty_tablet_queues, hostport, deadline));
     auto unique_id = next_record.first;
     auto record = next_record.second;
-    if (record.row_message().op() == RowMessage_Op_SAFEPOINT) {
+    if (record->row_message().op() == RowMessage_Op_SAFEPOINT) {
       continue;
     }
-    auto row_message = record.mutable_row_message();
+    auto row_message = record->mutable_row_message();
     auto lsn_result = GetRecordLSN(unique_id);
     auto txn_id_result = GetRecordTxnID(unique_id);
     if (lsn_result.ok() && txn_id_result.ok()) {
@@ -4495,7 +4495,7 @@ Status CDCServiceImpl::GetConsistentChangesInternal(
       row_message->set_pg_transaction_id(*txn_id_result);
       last_unique_record_id_ = unique_id;
       auto records = resp->add_cdc_sdk_proto_records();
-      records->CopyFrom(record);
+      records->CopyFrom(*record);
     }
   }
 
@@ -4561,10 +4561,10 @@ Status CDCServiceImpl::GetChangesInternal(
     RSTATUS_DCHECK(
         tablet_queues_.contains(tablet_id), InternalError,
         Format("Couldn't find tablet queue for tablet_id: $0", tablet_id));
-    vector<CDCSDKProtoRecordPB>& tablet_queue = tablet_queues_[tablet_id];
+    vector<std::shared_ptr<CDCSDKProtoRecordPB>>& tablet_queue = tablet_queues_[tablet_id];
     if (resp.cdc_sdk_proto_records_size() > 0) {
       for (const auto& record : resp.cdc_sdk_proto_records()) {
-        tablet_queue.push_back(record);
+        tablet_queue.push_back(std::make_shared<CDCSDKProtoRecordPB>(record));
       }
     }
 
@@ -4593,7 +4593,7 @@ Status CDCServiceImpl::AddEntryToVirtualWalPriorityQueue(
     }
     auto record = tablet_queue->front();
     // TODO: Remove this check once we add support for streaming DDL records.
-    if (record.row_message().op() == RowMessage_Op_DDL) {
+    if (record->row_message().op() == RowMessage_Op_DDL) {
       tablet_queue->erase(tablet_queue->begin());
       continue;
     }
@@ -4603,7 +4603,7 @@ Status CDCServiceImpl::AddEntryToVirtualWalPriorityQueue(
       sorted_records->push({tablet_id, {unique_id, record}});
       break;
     } else {
-      DCHECK_EQ(record.row_message().op(), RowMessage_Op_DDL);
+      DCHECK_EQ(record->row_message().op(), RowMessage_Op_DDL);
       tablet_queue->erase(tablet_queue->begin());
     }
   }
@@ -4671,9 +4671,10 @@ bool CompareCDCSDKProtoRecords::operator()(const RecordInfo& lhs, const RecordIn
   return !lhs_id->lessThan(rhs_id);
 }
 
-YbUniqueRecordID::YbUniqueRecordID(const TabletId& tablet_id, const CDCSDKProtoRecordPB& record) {
-  this->op_ = record.row_message().op();
-  this->commit_time_ = record.row_message().commit_time();
+YbUniqueRecordID::YbUniqueRecordID(
+    const TabletId& tablet_id, const std::shared_ptr<CDCSDKProtoRecordPB>& record) {
+  this->op_ = record->row_message().op();
+  this->commit_time_ = record->row_message().commit_time();
   switch (this->op_) {
     case RowMessage_Op_DDL: FALLTHROUGH_INTENDED;
     case RowMessage_Op_BEGIN:
@@ -4690,13 +4691,13 @@ YbUniqueRecordID::YbUniqueRecordID(const TabletId& tablet_id, const CDCSDKProtoR
     case RowMessage_Op_INSERT: FALLTHROUGH_INTENDED;
     case RowMessage_Op_DELETE: FALLTHROUGH_INTENDED;
     case RowMessage_Op_UPDATE:
-      this->record_time_ = record.row_message().record_time();
-      this->write_id_ = record.cdc_sdk_op_id().write_id();
+      this->record_time_ = record->row_message().record_time();
+      this->write_id_ = record->cdc_sdk_op_id().write_id();
       this->tablet_id_ = tablet_id;
       break;
     default:
       DLOG(FATAL) << "Unexpected record received in Tablet Queue for tablet_id: " << tablet_id
-                  << "Record:" << record.DebugString();
+                  << "Record:" << record->DebugString();
   }
 }
 
@@ -4709,22 +4710,22 @@ YbUniqueRecordID::YbUniqueRecordID(
       tablet_id_(tablet_id),
       write_id_(write_id) {}
 
-bool YbUniqueRecordID::CanFormYBUniqueRecordId(const CDCSDKProtoRecordPB& record) {
-  RowMessage_Op op = record.row_message().op();
+bool YbUniqueRecordID::CanFormYBUniqueRecordId(const std::shared_ptr<CDCSDKProtoRecordPB>& record) {
+  RowMessage_Op op = record->row_message().op();
   switch (op) {
     case RowMessage_Op_DDL: FALLTHROUGH_INTENDED;
     case RowMessage_Op_BEGIN: FALLTHROUGH_INTENDED;
     case RowMessage_Op_COMMIT: FALLTHROUGH_INTENDED;
     case RowMessage_Op_SAFEPOINT:
-      if (record.row_message().has_commit_time()) {
+      if (record->row_message().has_commit_time()) {
         return true;
       }
       break;
     case RowMessage_Op_INSERT: FALLTHROUGH_INTENDED;
     case RowMessage_Op_DELETE: FALLTHROUGH_INTENDED;
     case RowMessage_Op_UPDATE:
-      if (record.row_message().has_commit_time() && record.row_message().has_record_time() &&
-          record.cdc_sdk_op_id().has_write_id()) {
+      if (record->row_message().has_commit_time() && record->row_message().has_record_time() &&
+          record->cdc_sdk_op_id().has_write_id()) {
         return true;
       }
       break;

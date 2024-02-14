@@ -119,12 +119,13 @@ struct TabletCDCSDKCheckpointInfo {
 
 class YbUniqueRecordID {
  public:
-  explicit YbUniqueRecordID(const TabletId& tablet_id, const CDCSDKProtoRecordPB& record);
+  explicit YbUniqueRecordID(
+      const TabletId& tablet_id, const std::shared_ptr<CDCSDKProtoRecordPB>& record);
   explicit YbUniqueRecordID(
       RowMessage_Op op, uint64_t commit_time, uint64_t record_time, std::string tablet_id,
       uint32_t write_id);
 
-  static bool CanFormYBUniqueRecordId(const CDCSDKProtoRecordPB& record);
+  static bool CanFormYBUniqueRecordId(const std::shared_ptr<CDCSDKProtoRecordPB>& record);
 
   bool lessThan(const std::shared_ptr<YbUniqueRecordID>& record);
 
@@ -138,7 +139,8 @@ class YbUniqueRecordID {
   uint32_t write_id_;
 };
 
-using RecordIdToRecord = std::pair<std::shared_ptr<YbUniqueRecordID>, CDCSDKProtoRecordPB>;
+using RecordIdToRecord =
+    std::pair<std::shared_ptr<YbUniqueRecordID>, std::shared_ptr<CDCSDKProtoRecordPB>>;
 using RecordInfo = std::pair<TabletId, RecordIdToRecord>;
 
 struct CompareCDCSDKProtoRecords {
@@ -603,7 +605,7 @@ class CDCServiceImpl : public CDCServiceIf {
   std::unordered_map<TabletId, TableId> tablet_to_table_map_;
   std::unordered_set<TabletId> tablet_list_to_poll_;
   std::unordered_map<TabletId, TabletCDCSDKCheckpointInfo> tablet_checkpoint_map_;
-  std::unordered_map<TabletId, std::vector<CDCSDKProtoRecordPB>> tablet_queues_;
+  std::unordered_map<TabletId, std::vector<std::shared_ptr<CDCSDKProtoRecordPB>>> tablet_queues_;
   uint64_t lsn;
   uint32_t txn_id;
   std::shared_ptr<YbUniqueRecordID> last_unique_record_id_;
