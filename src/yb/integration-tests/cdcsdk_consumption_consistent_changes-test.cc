@@ -141,8 +141,8 @@ TEST_F(
   t4.join();
 
   int expected_dml_records = 2 * (2 * num_batches * queries_per_batch);
-  auto get_consistent_changes_resp = ASSERT_RESULT(
-      GetAllPendingChangesFromCdc(stream_id, {table2.table_id()}, expected_dml_records, true));
+  auto get_consistent_changes_resp = ASSERT_RESULT(GetAllPendingChangesFromCdc(
+      stream_id, {table2.table_id()}, expected_dml_records, true, 480 /* timeout */));
   LOG(INFO) << "Got " << get_consistent_changes_resp.records.size() << " records.";
 
   CheckRecordsConsistencyWithWriteId(get_consistent_changes_resp.records);

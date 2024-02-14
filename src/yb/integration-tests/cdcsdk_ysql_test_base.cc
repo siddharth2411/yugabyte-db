@@ -1744,7 +1744,7 @@ Result<string> CDCSDKYsqlTest::GetUniverseId(PostgresMiniCluster* cluster) {
 
   Result<CDCSDKYsqlTest::GetAllPendingChangesResponse> CDCSDKYsqlTest::GetAllPendingChangesFromCdc(
       const xrepl::StreamId& stream_id, std::vector<TableId> table_ids, int expected_dml_records,
-      bool init_virtual_wal) {
+      bool init_virtual_wal, int timeout_in_secs) {
     GetAllPendingChangesResponse resp;
     if (init_virtual_wal) {
       Status s = InitVirtualWAL(stream_id, table_ids);
@@ -1789,7 +1789,7 @@ Result<string> CDCSDKYsqlTest::GetUniverseId(PostgresMiniCluster* cluster) {
 
           return true;
         },
-        MonoDelta::FromSeconds(300), "Didnt receive expected records within time"));
+        MonoDelta::FromSeconds(timeout_in_secs), "Didnt receive expected records within time"));
 
     LOG(INFO) << "Record count array: ";
     for (int i = 0; i < 8; i++) {

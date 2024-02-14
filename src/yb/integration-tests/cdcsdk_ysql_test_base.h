@@ -479,7 +479,7 @@ class CDCSDKYsqlTest : public CDCSDKTestBase {
 
   Result<GetAllPendingChangesResponse> GetAllPendingChangesFromCdc(
       const xrepl::StreamId& stream_id, std::vector<TableId> table_ids, int expected_records,
-      bool init_virtual_wal);
+      bool init_virtual_wal, int timeout_in_secs = 300);
 
   GetAllPendingChangesResponse GetAllPendingChangesFromCdc(
       const xrepl::StreamId& stream_id,
