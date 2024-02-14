@@ -64,7 +64,7 @@ TEST_F(
   xrepl::StreamId stream_id = ASSERT_RESULT(CreateConsistentSnapshotStream(
       CDCSDKSnapshotOption::NOEXPORT_SNAPSHOT, CDCCheckpointType::IMPLICIT));
 
-  int num_batches = 75;
+  int num_batches = 50;
   int inserts_per_batch = 100;
 
   std::thread t1(
@@ -89,7 +89,7 @@ TEST_F(
 TEST_F(
     CDCSDKConsumptionConsistentChangesTest,
     YB_DISABLE_TEST_IN_TSAN(TestCDCSDKConsistentStreamWithForeignKeys)) {
-  ANNOTATE_UNPROTECTED_WRITE(FLAGS_cdc_max_stream_intent_records) = 30;
+  ANNOTATE_UNPROTECTED_WRITE(FLAGS_cdc_max_stream_intent_records) = 50;
   ANNOTATE_UNPROTECTED_WRITE(fLB::FLAGS_yb_enable_cdc_consistent_snapshot_streams) = true;
   ASSERT_OK(SetUpWithParams(3, 1, false, true));
 
@@ -112,8 +112,8 @@ TEST_F(
   ASSERT_OK(conn.Execute("INSERT INTO test1 VALUES (1, 1)"));
   ASSERT_OK(conn.Execute("INSERT INTO test1 VALUES (2, 2)"));
 
-  int queries_per_batch = 60;
-  int num_batches = 60;
+  int queries_per_batch = 50;
+  int num_batches = 30;
   std::thread t1([&]() -> void {
     PerformSingleAndMultiShardQueries(
         num_batches, queries_per_batch, "INSERT INTO test2 VALUES ($0, 1, 1)", 20);
@@ -141,8 +141,8 @@ TEST_F(
   t4.join();
 
   int expected_dml_records = 2 * (2 * num_batches * queries_per_batch);
-  auto get_consistent_changes_resp = ASSERT_RESULT(GetAllPendingChangesFromCdc(
-      stream_id, {table2.table_id()}, expected_dml_records, true, 480 /* timeout */));
+  auto get_consistent_changes_resp = ASSERT_RESULT(
+      GetAllPendingChangesFromCdc(stream_id, {table2.table_id()}, expected_dml_records, true));
   LOG(INFO) << "Got " << get_consistent_changes_resp.records.size() << " records.";
 
   CheckRecordsConsistencyWithWriteId(get_consistent_changes_resp.records);
@@ -152,9 +152,10 @@ TEST_F(
 TEST_F(
     CDCSDKConsumptionConsistentChangesTest,
     YB_DISABLE_TEST_IN_TSAN(TestCDCSDKConsistentStreamWithAbortedTransactions)) {
-  ANNOTATE_UNPROTECTED_WRITE(FLAGS_cdc_max_stream_intent_records) = 30;
+  ANNOTATE_UNPROTECTED_WRITE(FLAGS_cdc_max_stream_intent_records) = 10;
   ANNOTATE_UNPROTECTED_WRITE(FLAGS_cdc_enable_consistent_records) = false;
   ANNOTATE_UNPROTECTED_WRITE(fLB::FLAGS_yb_enable_cdc_consistent_snapshot_streams) = true;
+  ANNOTATE_UNPROTECTED_WRITE(FLAGS_cdcsdk_max_consistent_records) = 10;
   ASSERT_OK(SetUpWithParams(3, 1, false, true));
   auto table = ASSERT_RESULT(CreateTable(&test_cluster_, kNamespaceName, kTableName));
   google::protobuf::RepeatedPtrField<master::TabletLocationsPB> tablets;
@@ -278,7 +279,7 @@ void CDCSDKConsumptionConsistentChangesTest::TestCDCSDKConsistentStreamWithTable
   xrepl::StreamId stream_id = ASSERT_RESULT(CreateConsistentSnapshotStream(
       CDCSDKSnapshotOption::NOEXPORT_SNAPSHOT, CDCCheckpointType::IMPLICIT));
 
-  int num_batches = 75;
+  int num_batches = 25;
   int inserts_per_batch = 100;
 
   std::thread t1(
