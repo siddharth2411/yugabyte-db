@@ -308,9 +308,6 @@ void CDCSDKConsumptionConsistentChangesTest::TestCDCSDKConsistentStreamWithTable
   t3.join();
   t4.join();
 
-  ASSERT_OK(test_client()->FlushTables({table.table_id()}, false, 1000, true));
-  ASSERT_OK(test_cluster_.mini_cluster_->CompactTablets());
-
   google::protobuf::RepeatedPtrField<master::TabletLocationsPB> tablets_after_first_split;
   ASSERT_OK(test_client()->GetTablets(table, 0, &tablets_after_first_split, nullptr));
   ASSERT_EQ(tablets_after_first_split.size(), 4);
