@@ -122,7 +122,7 @@ class YbUniqueRecordID {
   explicit YbUniqueRecordID(
       const TabletId& tablet_id, const std::shared_ptr<CDCSDKProtoRecordPB>& record);
   explicit YbUniqueRecordID(
-      RowMessage_Op op, uint64_t commit_time, uint64_t record_time, std::string tablet_id,
+      RowMessage_Op op, uint64_t commit_time, uint64_t record_time, std::string& tablet_id,
       uint32_t write_id);
 
   static bool CanFormYBUniqueRecordId(const std::shared_ptr<CDCSDKProtoRecordPB>& record);
@@ -521,7 +521,7 @@ class CDCServiceImpl : public CDCServiceIf {
 
   Status GetTabletListAndCheckpoint(
       const xrepl::StreamId& stream_id, const TableId table_id, HostPort hostport,
-      CoarseTimePoint deadline, const TabletId parent_tablet_id = "");
+      CoarseTimePoint deadline, const TabletId& parent_tablet_id = "");
 
   Status GetConsistentChangesInternal(
       const xrepl::StreamId& stream_id, GetConsistentChangesResponsePB* resp, HostPort hostport,
@@ -530,6 +530,14 @@ class CDCServiceImpl : public CDCServiceIf {
   Status GetChangesInternal(
       const xrepl::StreamId& stream_id, const std::unordered_set<TabletId> tablet_to_poll_list,
       HostPort hostport, CoarseTimePoint deadline);
+
+  Status PopulateGetChangesRequest(
+      const xrepl::StreamId& stream_id, const TabletId& tablet_id, GetChangesRequestPB& req);
+
+  Status AddRecordsToTabletQueue(const TabletId& tablet_id, const GetChangesResponsePB& resp);
+
+  Status UpdateTabletCheckpointForNextRequest(
+      const TabletId& tablet_id, const GetChangesResponsePB& resp);
 
   Status AddEntryToVirtualWalPriorityQueue(
       TabletId tablet_id, TabletRecordPriorityQueue* sorted_records);
@@ -604,7 +612,7 @@ class CDCServiceImpl : public CDCServiceIf {
   std::unordered_set<TableId> publication_table_list_;
   std::unordered_map<TabletId, TableId> tablet_to_table_map_;
   std::unordered_set<TabletId> tablet_list_to_poll_;
-  std::unordered_map<TabletId, TabletCDCSDKCheckpointInfo> tablet_checkpoint_map_;
+  std::unordered_map<TabletId, TabletCDCSDKCheckpointInfo> tablet_next_req_checkpoint_map_;
   std::unordered_map<TabletId, std::vector<std::shared_ptr<CDCSDKProtoRecordPB>>> tablet_queues_;
   uint64_t lsn;
   uint32_t txn_id;
