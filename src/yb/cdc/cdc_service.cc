@@ -4706,9 +4706,13 @@ YbUniqueRecordID::YbUniqueRecordID(
       this->write_id_ = record->cdc_sdk_op_id().write_id();
       this->tablet_id_ = tablet_id;
       break;
-    default:
-      DLOG(FATAL) << "Unexpected record received in Tablet Queue for tablet_id: " << tablet_id
-                  << "Record:" << record->DebugString();
+    case RowMessage_Op_UNKNOWN: FALLTHROUGH_INTENDED;
+    case RowMessage_Op_TRUNCATE: FALLTHROUGH_INTENDED;
+    case RowMessage_Op_READ:
+      // This should never happen as we only invoke this constructor after ensuring that the value
+      // is not one of these.
+      LOG(FATAL) << "Unexpected record received in Tablet Queue for tablet_id: " << tablet_id
+                 << "Record:" << record->DebugString();
   }
 }
 
