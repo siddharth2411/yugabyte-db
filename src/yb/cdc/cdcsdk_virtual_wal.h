@@ -60,6 +60,8 @@ class CDCSDKVirtualWAL {
     OpId from_op_id;
     std::string key;
     int32_t write_id;
+
+    std::string ToString() const;
   };
 
   // For explict checkpointing, we only require a subset of fields defined in GetChangesRequestInfo
@@ -68,6 +70,8 @@ class CDCSDKVirtualWAL {
   struct LastSentGetChangesRequestInfo {
     OpId from_op_id;
     uint64_t safe_hybrid_time;
+
+    std::string ToString() const;
   };
 
   struct CommitRecordMetadata {
@@ -89,7 +93,8 @@ class CDCSDKVirtualWAL {
       const xrepl::StreamId& stream_id, const TableId table_id, const HostPort hostport,
       const CoarseTimePoint deadline, const TabletId& parent_tablet_id = "");
 
-  Status RemoveParentTabletEntryOnSplit(const TabletId& parent_tablet_id);
+  Status UpdateTabletMapsOnSplit(
+      const TabletId& parent_tablet_id, const std::vector<TabletId> children_tablets);
 
   Status GetChangesInternal(
       const xrepl::StreamId& stream_id, const std::unordered_set<TabletId> tablet_to_poll_list,
@@ -128,7 +133,8 @@ class CDCSDKVirtualWAL {
   CDCServiceImpl* cdc_service_;
 
   std::unordered_set<TableId> publication_table_list_;
-  std::unordered_map<TabletId, TableId> tablet_id_to_table_id_map_;
+
+  std::unordered_map<TabletId, std::unordered_set<TableId>> tablet_id_to_table_id_map_;
 
   // Tablet queues hold the records received from GetChanges RPC call on their respective tablets.
   std::unordered_map<TabletId, std::queue<std::shared_ptr<CDCSDKProtoRecordPB>>> tablet_queues_;
