@@ -20,12 +20,11 @@ namespace cdc {
 
 class CDCSDKUniqueRecordID {
  public:
-  explicit CDCSDKUniqueRecordID(
-      const TabletId& tablet_id, const std::shared_ptr<CDCSDKProtoRecordPB>& record);
+  explicit CDCSDKUniqueRecordID(const std::shared_ptr<CDCSDKProtoRecordPB>& record);
 
   explicit CDCSDKUniqueRecordID(
-      RowMessage_Op op, uint64_t commit_time, uint64_t record_time, std::string& tablet_id,
-      uint32_t write_id);
+      RowMessage_Op op, uint64_t commit_time, uint64_t record_time, std::string& table_id,
+      std::string& primary_key);
 
   static bool CanFormUniqueRecordId(const std::shared_ptr<CDCSDKProtoRecordPB>& record);
 
@@ -37,8 +36,8 @@ class CDCSDKUniqueRecordID {
   RowMessage_Op op_;
   uint64_t commit_time_;
   uint64_t record_time_;
-  std::string tablet_id_;
-  uint32_t write_id_;
+  std::string table_id_;
+  std::string primary_key_;
 };
 
 }  // namespace cdc
