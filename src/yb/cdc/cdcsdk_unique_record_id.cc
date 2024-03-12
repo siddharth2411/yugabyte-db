@@ -18,45 +18,43 @@ namespace yb {
 namespace cdc {
 
 CDCSDKUniqueRecordID::CDCSDKUniqueRecordID(
-    RowMessage_Op op, uint64_t commit_time, uint64_t record_time, std::string& tablet_id,
-    uint32_t write_id)
+    RowMessage_Op op, uint64_t commit_time, uint64_t record_time, std::string& table_id,
+    std::string& primary_key)
     : op_(op),
       commit_time_(commit_time),
       record_time_(record_time),
-      tablet_id_(tablet_id),
-      write_id_(write_id) {}
+      table_id_(table_id),
+      primary_key_(primary_key) {}
 
-CDCSDKUniqueRecordID::CDCSDKUniqueRecordID(
-    const TabletId& tablet_id, const std::shared_ptr<CDCSDKProtoRecordPB>& record) {
+CDCSDKUniqueRecordID::CDCSDKUniqueRecordID(const std::shared_ptr<CDCSDKProtoRecordPB>& record) {
   this->op_ = record->row_message().op();
   this->commit_time_ = record->row_message().commit_time();
   switch (this->op_) {
     case RowMessage_Op_DDL: FALLTHROUGH_INTENDED;
     case RowMessage_Op_BEGIN:
       this->record_time_ = 0;
-      this->write_id_ = 0;
-      this->tablet_id_ = "";
+      this->table_id_ = "";
+      this->primary_key_ = "";
       break;
     case RowMessage_Op_SAFEPOINT: FALLTHROUGH_INTENDED;
     case RowMessage_Op_COMMIT:
       this->record_time_ = std::numeric_limits<uint64_t>::max();
-      this->write_id_ = std::numeric_limits<uint32_t>::max();
-      this->tablet_id_ = "";
+      this->table_id_ = "";
+      this->primary_key_ = "";
       break;
     case RowMessage_Op_INSERT: FALLTHROUGH_INTENDED;
     case RowMessage_Op_DELETE: FALLTHROUGH_INTENDED;
     case RowMessage_Op_UPDATE:
       this->record_time_ = record->row_message().record_time();
-      this->write_id_ = record->cdc_sdk_op_id().write_id();
-      this->tablet_id_ = tablet_id;
+      this->table_id_ = record->row_message().table_id();
+      this->primary_key_ = record->row_message().primary_key();
       break;
     case RowMessage_Op_UNKNOWN: FALLTHROUGH_INTENDED;
     case RowMessage_Op_TRUNCATE: FALLTHROUGH_INTENDED;
     case RowMessage_Op_READ:
       // This should never happen as we only invoke this constructor after ensuring that the value
       // is not one of these.
-      LOG(FATAL) << "Unexpected record received in Tablet Queue for tablet_id: " << tablet_id
-                 << "Record:" << record->DebugString();
+      LOG(FATAL) << "Unexpected record received: " << record->DebugString();
   }
 }
 
@@ -77,7 +75,7 @@ bool CDCSDKUniqueRecordID::CanFormUniqueRecordId(
     case RowMessage_Op_UPDATE:
       return (
           record->row_message().has_commit_time() && record->row_message().has_record_time() &&
-          record->cdc_sdk_op_id().has_write_id());
+          record->row_message().has_table_id() && record->row_message().has_primary_key());
       break;
     case RowMessage_Op_TRUNCATE: FALLTHROUGH_INTENDED;
     case RowMessage_Op_READ: FALLTHROUGH_INTENDED;
@@ -96,10 +94,11 @@ bool CDCSDKUniqueRecordID::lessThan(const std::shared_ptr<CDCSDKUniqueRecordID>&
   if (this->record_time_ != record->record_time_) {
     return this->record_time_ < record->record_time_;
   }
-  if (this->write_id_ != record->write_id_) {
-    return this->write_id_ < record->write_id_;
+  if (this->table_id_ != record->table_id_) {
+    return this->table_id_ < record->table_id_;
   }
-  return this->tablet_id_ < record->tablet_id_;
+
+  return this->primary_key_ < record->primary_key_;
 }
 
 }  // namespace cdc
