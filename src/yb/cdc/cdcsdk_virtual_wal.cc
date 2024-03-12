@@ -27,17 +27,17 @@ using RecordInfo = CDCSDKVirtualWAL::RecordInfo;
 using TabletRecordInfoPair = CDCSDKVirtualWAL::TabletRecordInfoPair;
 
 std::string CDCSDKVirtualWAL::GetChangesRequestInfo::ToString() const {
-  std::string result = Format(", from_op_id: $0", from_op_id);
+  std::string result = Format("from_op_id: $0", from_op_id);
   result += Format(", key: $0", key);
   result += Format(", write_id: $0", write_id);
   result += Format(", safe_hybrid_time: $0", safe_hybrid_time);
-  result += Format(", Wal_segment_index: $0", wal_segment_index);
+  result += Format(", wal_segment_index: $0", wal_segment_index);
 
   return result;
 }
 
 std::string CDCSDKVirtualWAL::LastSentGetChangesRequestInfo::ToString() const {
-  std::string result = Format(", from_op_id: $0", from_op_id);
+  std::string result = Format("from_op_id: $0", from_op_id);
   result += Format(", safe_hybrid_time: $0", safe_hybrid_time);
 
   return result;
@@ -62,7 +62,7 @@ Status CDCSDKVirtualWAL::InitVirtualWALInternal(
   auto s = InitLSNAndTxnIDGenerators(stream_id);
   if (!s.ok()) {
     LOG(WARNING) << Format("Init LSN & TxnID generators failed for stream_id: $0", stream_id);
-    RETURN_NOT_OK(s);
+    RETURN_NOT_OK(s.CloneAndPrepend(Format("Init LSN & TxnID generators failed")));
   }
   return Status::OK();
 }
@@ -118,7 +118,7 @@ Status CDCSDKVirtualWAL::GetTabletListAndCheckpoint(
         Format("Table_id not found for parent tablet_id $0"), parent_tablet_id);
     RSTATUS_DCHECK(
         tablet_next_req_map_.contains(parent_tablet_id), NotFound,
-        Format("Next GetChanges Request Info not found for parent tablet_id $0", parent_tablet_id));
+        Format("Next getchanges_request_info not found for parent tablet_id $0", parent_tablet_id));
     RSTATUS_DCHECK(
         tablet_queues_.contains(parent_tablet_id), NotFound,
         Format("Tablet queue not found for parent tablet_id $0", parent_tablet_id));
@@ -146,7 +146,7 @@ Status CDCSDKVirtualWAL::GetTabletListAndCheckpoint(
       info.wal_segment_index = 0;
       tablet_next_req_map_[tablet_id] = info;
       VLOG(2) << "Adding entry in tablet_next_req map for tablet_id: " << tablet_id
-              << " with Next Request Info: " << info.ToString();
+              << " with next getchanges_request_info: " << info.ToString();
     }
 
     if (!tablet_queues_.contains(tablet_id)) {
@@ -192,13 +192,13 @@ Status CDCSDKVirtualWAL::UpdateTabletMapsOnSplit(
     if (!tablet_last_sent_req_map_.contains(child_tablet_id)) {
       tablet_last_sent_req_map_[child_tablet_id] = parent_last_sent_req_info;
       VLOG(3) << "Added entry in tablet_last_sent_req_map_ for child tablet_id: " << child_tablet_id
-              << " with Last Sent Request Info: " << parent_last_sent_req_info.ToString();
+              << " with last_sent_request_info: " << parent_last_sent_req_info.ToString();
     }
 
     if (!tablet_next_req_map_.contains(child_tablet_id)) {
       tablet_next_req_map_[child_tablet_id] = parent_next_req_info;
       VLOG(3) << "Added entry in tablet_next_req_map_ for child tablet_id: " << child_tablet_id
-              << " with Next Request Info: " << parent_next_req_info.ToString();
+              << " with next getchanges_request_info: " << parent_next_req_info.ToString();
     }
   }
 
@@ -303,9 +303,9 @@ Status CDCSDKVirtualWAL::GetConsistentChangesInternal(
   for (const auto& entry : tablet_queues_) {
     auto s = AddRecordToVirtualWalPriorityQueue(entry.first, &sorted_records);
     if (!s.ok()) {
-      LOG(WARNING) << "Couldnt add entries to the VirtualWAL Queue for stream_id: " << stream_id
+      LOG(INFO) << "Couldnt add entries to the VirtualWAL Queue for stream_id: " << stream_id
                    << " and tablet_id: " << entry.first;
-      RETURN_NOT_OK(s);
+      RETURN_NOT_OK(s.CloneAndReplaceCode(Status::Code::kTryAgain));
     }
   }
 

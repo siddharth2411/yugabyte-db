@@ -4323,10 +4323,9 @@ void CDCServiceImpl::InitVirtualWALForCDC(
     }
 
     std::string error_msg = Format("VirtualWAL initialisation failed for stream_id: $0", stream_id);
-    LOG(WARNING) << error_msg;
+    LOG(WARNING) << s.CloneAndPrepend(error_msg);
     RPC_STATUS_RETURN_ERROR(
         s.CloneAndPrepend(error_msg), resp->mutable_error(), CDCErrorPB::INTERNAL_ERROR, context);
-    return;
   }
 
   LOG(INFO) << "VirtualWAL instance successfully created for session_id: " << session_id;
@@ -4369,7 +4368,7 @@ void CDCServiceImpl::GetConsistentChanges(
   Status s = virtual_wal->GetConsistentChangesInternal(
       stream_id, resp, hostport, GetDeadline(context, client()));
   if (!s.ok()) {
-    std::string msg = Format("GetConsistentChanges failed for stream_id: $0", stream_id);
+    std::string msg = Format("GetConsistentChanges failed for stream_id: $0 with error: $1", stream_id, s);
     LOG(WARNING) << msg;
   }
 
