@@ -1446,7 +1446,6 @@ TEST_F(
   // The record count array stores counts of DDL, INSERT, UPDATE, DELETE, READ, TRUNCATE, BEGIN,
   // COMMIT in that order.
   int common_record_count[8] = {0, 0, 0, 0, 0, 0, 0, 0};
-  ;
   uint64_t restart_lsn = 0;
   for (const auto& record : received_records) {
     if (record.row_message().pg_transaction_id() == last_record_txn_id) {

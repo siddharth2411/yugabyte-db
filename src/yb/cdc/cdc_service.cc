@@ -4368,7 +4368,8 @@ void CDCServiceImpl::GetConsistentChanges(
   Status s = virtual_wal->GetConsistentChangesInternal(
       stream_id, resp, hostport, GetDeadline(context, client()));
   if (!s.ok()) {
-    std::string msg = Format("GetConsistentChanges failed for stream_id: $0 with error: $1", stream_id, s);
+    std::string msg =
+        Format("GetConsistentChanges failed for stream_id: $0 with error: $1", stream_id, s);
     LOG(WARNING) << msg;
   }
 
