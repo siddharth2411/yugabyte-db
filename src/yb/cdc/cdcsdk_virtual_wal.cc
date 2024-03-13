@@ -376,7 +376,8 @@ Status CDCSDKVirtualWAL::GetChangesInternal(
           // single entry in the set unless it's a colocated table case, in which case, the tablet
           // is not expected to split.
           s = GetTabletListAndCheckpoint(
-                  stream_id, *tablet_id_to_table_id_map_[tablet_id].begin(), hostport, deadline, tablet_id);
+              stream_id, *tablet_id_to_table_id_map_[tablet_id].begin(), hostport, deadline,
+              tablet_id);
           if (!s.ok()) {
             error_msg = Format("Error fetching children tablets for tablet_id: $0", tablet_id);
             LOG(WARNING) << s.CloneAndPrepend(error_msg).ToString();
