@@ -221,8 +221,15 @@ Status CDCSDKVirtualWAL::GetConsistentChangesInternal(
     auto lsn_result = GetRecordLSN(unique_id);
     auto txn_id_result = GetRecordTxnID(unique_id);
     if (lsn_result.ok() && txn_id_result.ok()) {
-      row_message->set_pg_lsn(*lsn_result);
-      row_message->set_pg_transaction_id(*txn_id_result);
+      // Skip assigning LSN & txnID for a DDL record as the LSN & txnID generators do not actually
+      // bump the last_seen_lsn & last_seen_txn_id incase of a DDL record.
+      if (record->row_message().op() != RowMessage_Op_DDL) {
+        row_message->set_pg_lsn(*lsn_result);
+        row_message->set_pg_transaction_id(*txn_id_result);
+      }
+
+      // Update the last_seen_unique_record_id because this is used by the LSN &
+      // txnID generator to filter records with a lower unique_record_id.
       last_seen_unique_record_id_ = unique_id;
 
       if (record->row_message().op() == RowMessage_Op_BEGIN) {
@@ -230,6 +237,14 @@ Status CDCSDKVirtualWAL::GetConsistentChangesInternal(
       } else if (record->row_message().op() == RowMessage_Op_COMMIT) {
         last_shipped_commit.commit_lsn = *lsn_result;
         last_shipped_commit.commit_txn_id = *txn_id_result;
+        last_shipped_commit.commit_record_unique_id = unique_id;
+      } else if (record->row_message().op() == RowMessage_Op_DDL) {
+        // While shipping a DDL, since we do not generate a new LSN & txnID for a DDL record, we
+        // will only update the unique record ID stored as part of the last shipped commit
+        // struct. This is important because unique record ID internally holds a commit_time value
+        // that is persisted in the cdc_state table whenever we receive a feedback from the
+        // walsender. This persisted value is then used to initialise the LSN & txnID generators on
+        // a restart.
         last_shipped_commit.commit_record_unique_id = unique_id;
       }
       auto records = resp->add_cdc_sdk_proto_records();
@@ -356,7 +371,13 @@ Status CDCSDKVirtualWAL::AddRecordsToTabletQueue(
   std::queue<std::shared_ptr<CDCSDKProtoRecordPB>>& tablet_queue = tablet_queues_[tablet_id];
   if (resp->cdc_sdk_proto_records_size() > 0) {
     for (const auto& record : resp->cdc_sdk_proto_records()) {
-      tablet_queue.push(std::make_shared<CDCSDKProtoRecordPB>(record));
+      // cdc_service sends artificially generated DDL records whenever it has a cache miss while
+      // checking for schema. These DDL records do not have a commit_time value as they does not
+      // correspond to an actual WAL entry. Hence, it is safe to skip them from adding into the
+      // tablet queue.
+      if (record.row_message().has_commit_time()) {
+        tablet_queue.push(std::make_shared<CDCSDKProtoRecordPB>(record));
+      }
     }
   }
 
@@ -397,11 +418,6 @@ Status CDCSDKVirtualWAL::AddRecordToVirtualWalPriorityQueue(
           InternalError, Format("Tablet queue is empty for tablet_id: $0", tablet_id));
     }
     auto record = tablet_queue->front();
-    // TODO: Remove this check once we add support for streaming DDL records.
-    if (record->row_message().op() == RowMessage_Op_DDL) {
-      tablet_queue->pop();
-      continue;
-    }
     bool result = CDCSDKUniqueRecordID::CanFormUniqueRecordId(record);
     if (result) {
       auto unique_id =
@@ -442,7 +458,11 @@ Result<uint64_t> CDCSDKVirtualWAL::GetRecordLSN(
   // duplicate records like BEGIN/COMMIT that can be received in case of multi-shard transaction or
   // multiple transactions with same commit_time.
   if (last_seen_unique_record_id_->lessThan(record_id)) {
-    last_seen_lsn_ += 1;
+    // Do not bump the LSN on a DDL record as DDL records are only meant for walsender's internal
+    // usage and not actually sent to the client.
+    if (record_id->GetOp() != RowMessage_Op_DDL) {
+      last_seen_lsn_ += 1;
+    }
     return last_seen_lsn_;
   }
 
@@ -455,7 +475,11 @@ Result<uint32_t> CDCSDKVirtualWAL::GetRecordTxnID(
   auto curr_record_commit_time = record_id->GetCommitTime();
 
   if (last_seen_commit_time < curr_record_commit_time) {
-    last_seen_txn_id_ += 1;
+    // Do not bump the txnID on a DDL record as DDL records are only meant for walsender's internal
+    // usage and not actually sent to the client.
+    if (record_id->GetOp() != RowMessage_Op_DDL) {
+      last_seen_txn_id_ += 1;
+    }
     return last_seen_txn_id_;
   } else if (last_seen_commit_time == curr_record_commit_time) {
     return last_seen_txn_id_;
@@ -553,11 +577,11 @@ Status CDCSDKVirtualWAL::UpdateSlotEntryInCDCState(
 }
 
 bool CDCSDKVirtualWAL::CompareCDCSDKProtoRecords::operator()(
-    const TabletRecordInfoPair& lhs, const TabletRecordInfoPair& rhs) const {
-  auto lhs_record_id = lhs.second.first;
-  auto rhs_record_id = rhs.second.first;
+    const TabletRecordInfoPair& new_record, const TabletRecordInfoPair& old_record) const {
+  auto old_record_id = old_record.second.first;
+  auto new_record_id = new_record.second.first;
 
-  return !lhs_record_id->lessThan(rhs_record_id);
+  return old_record_id->lessThan(new_record_id);
 }
 
 }  // namespace cdc

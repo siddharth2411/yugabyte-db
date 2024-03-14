@@ -31,7 +31,11 @@ class CDCSDKUniqueRecordID {
 
   bool lessThan(const std::shared_ptr<CDCSDKUniqueRecordID>& record);
 
+  bool CompareDDLOrder(const std::shared_ptr<CDCSDKUniqueRecordID>& record);
+
   uint64_t GetCommitTime() const;
+
+  RowMessage_Op GetOp() const;
 
  private:
   RowMessage_Op op_;

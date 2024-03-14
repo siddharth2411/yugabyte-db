@@ -79,7 +79,7 @@ class CDCSDKVirtualWAL {
   // Custom comparator to sort records in the TabletRecordPriorityQueue by comparing their unique
   // record IDs.
   struct CompareCDCSDKProtoRecords {
-    bool operator()(const TabletRecordInfoPair& lhs, const TabletRecordInfoPair& rhs) const;
+    bool operator()(const TabletRecordInfoPair& new_record, const TabletRecordInfoPair& old_record) const;
   };
 
   using TabletRecordPriorityQueue = std::priority_queue<

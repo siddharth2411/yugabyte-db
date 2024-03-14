@@ -31,12 +31,12 @@ CDCSDKUniqueRecordID::CDCSDKUniqueRecordID(
   this->op_ = record->row_message().op();
   this->commit_time_ = record->row_message().commit_time();
   switch (this->op_) {
-    case RowMessage_Op_DDL: FALLTHROUGH_INTENDED;
     case RowMessage_Op_BEGIN:
       this->record_time_ = 0;
       this->write_id_ = 0;
       this->tablet_id_ = "";
       break;
+    case RowMessage_Op_DDL: FALLTHROUGH_INTENDED;
     case RowMessage_Op_SAFEPOINT: FALLTHROUGH_INTENDED;
     case RowMessage_Op_COMMIT:
       this->record_time_ = std::numeric_limits<uint64_t>::max();
@@ -61,6 +61,8 @@ CDCSDKUniqueRecordID::CDCSDKUniqueRecordID(
 }
 
 uint64_t CDCSDKUniqueRecordID::GetCommitTime() const { return commit_time_; }
+
+RowMessage_Op CDCSDKUniqueRecordID::GetOp() const { return op_; }
 
 bool CDCSDKUniqueRecordID::CanFormUniqueRecordId(
     const std::shared_ptr<CDCSDKProtoRecordPB>& record) {
@@ -89,10 +91,31 @@ bool CDCSDKUniqueRecordID::CanFormUniqueRecordId(
   return false;
 }
 
+bool CDCSDKUniqueRecordID::CompareDDLOrder(const std::shared_ptr<CDCSDKUniqueRecordID>& record) {
+  if (this->op_ == RowMessage_Op_DDL) {
+    if (record->op_ == RowMessage_Op_DDL) {
+      // If there are two DDL records with same commit_time, only one of them should be shipped.
+      return false;
+    } else if (record->op_ == RowMessage_Op_COMMIT) {
+      return false;
+    }
+    return true;
+  } else if (this->op_ == RowMessage_Op_COMMIT) {
+    return true;
+  }
+
+  return false;
+}
+
 bool CDCSDKUniqueRecordID::lessThan(const std::shared_ptr<CDCSDKUniqueRecordID>& record) {
   if (this->commit_time_ != record->commit_time_) {
     return this->commit_time_ < record->commit_time_;
   }
+
+  if (this->op_ == RowMessage_Op_DDL || record->op_ == RowMessage_Op_DDL) {
+    return CompareDDLOrder(record);
+  }
+
   if (this->record_time_ != record->record_time_) {
     return this->record_time_ < record->record_time_;
   }
