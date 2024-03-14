@@ -562,7 +562,13 @@ class CDCSDKYsqlTest : public CDCSDKTestBase {
 
   void ValidateColumnCounts(const GetChangesResponsePB& resp, uint32_t excepted_column_counts);
 
+  void ValidateColumnCounts(
+      const GetAllPendingChangesResponse& resp, uint32_t excepted_column_counts);
+
   void ValidateInsertCounts(const GetChangesResponsePB& resp, uint32_t excepted_insert_counts);
+
+  void ValidateInsertCounts(
+      const GetAllPendingChangesResponse& resp, uint32_t excepted_insert_counts);
 
   void WaitUntilSplitIsSuccesful(
       const TabletId& tablet_id, const yb::client::YBTableName& table,
@@ -624,7 +630,7 @@ class CDCSDKYsqlTest : public CDCSDKTestBase {
 
   void CheckRecordsConsistency(const std::vector<CDCSDKProtoRecordPB>& records);
 
-  void CheckRecordCount(GetAllPendingChangesResponse resp, int expected_dml_records);
+  void CheckRecordCount(GetAllPendingChangesResponse resp, int expected_dml_records, int expected_ddl_records = 0);
 
   void CheckRecordsConsistencyWithWriteId(const std::vector<CDCSDKProtoRecordPB>& records);
 

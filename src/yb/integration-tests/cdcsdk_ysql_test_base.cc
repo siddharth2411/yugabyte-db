@@ -2583,12 +2583,36 @@ Result<string> CDCSDKYsqlTest::GetUniverseId(PostgresMiniCluster* cluster) {
     }
   }
 
+  void CDCSDKYsqlTest::ValidateColumnCounts(
+      const GetAllPendingChangesResponse& resp, uint32_t excepted_column_counts) {
+    size_t record_size = resp.records.size();
+    for (uint32_t idx = 0; idx < record_size; idx++) {
+      const CDCSDKProtoRecordPB record = resp.records[idx];
+      if (record.row_message().op() == RowMessage::INSERT) {
+        ASSERT_EQ(record.row_message().new_tuple_size(), excepted_column_counts);
+      }
+    }
+  }
+
   void CDCSDKYsqlTest::ValidateInsertCounts(const GetChangesResponsePB& resp,
     uint32_t excepted_insert_counts) {
     uint32_t record_size = resp.cdc_sdk_proto_records_size();
     uint32_t insert_count = 0;
     for (uint32_t idx = 0; idx < record_size; idx++) {
       const CDCSDKProtoRecordPB record = resp.cdc_sdk_proto_records(idx);
+      if (record.row_message().op() == RowMessage::INSERT) {
+        insert_count += 1;
+      }
+    }
+    ASSERT_EQ(insert_count, excepted_insert_counts);
+  }
+
+  void CDCSDKYsqlTest::ValidateInsertCounts(
+      const GetAllPendingChangesResponse& resp, uint32_t excepted_insert_counts) {
+    size_t record_size = resp.records.size();
+    uint32_t insert_count = 0;
+    for (uint32_t idx = 0; idx < record_size; idx++) {
+      const CDCSDKProtoRecordPB record = resp.records[idx];
       if (record.row_message().op() == RowMessage::INSERT) {
         insert_count += 1;
       }
@@ -3667,12 +3691,19 @@ Result<string> CDCSDKYsqlTest::GetUniverseId(PostgresMiniCluster* cluster) {
   }
 
   void CDCSDKYsqlTest::CheckRecordCount(
-      GetAllPendingChangesResponse resp, int expected_dml_records) {
+      GetAllPendingChangesResponse resp, int expected_dml_records, int expected_ddl_records) {
     // The record count array in GetAllPendingChangesResponse stores counts of DDL, INSERT, UPDATE,
     // DELETE, READ, TRUNCATE, BEGIN, COMMIT in that order.
     int dml_records =
         resp.record_count[1] + resp.record_count[2] + resp.record_count[3] + resp.record_count[5];
     ASSERT_EQ(dml_records, expected_dml_records);
+
+    if (expected_ddl_records > 0) {
+      int ddl_records = resp.record_count[0];
+      // DDL records with the same schema can be received mulitple times since they can have
+      // different commit_time. Hence, we assert >= on expected DDL records.
+      ASSERT_GE(ddl_records, expected_ddl_records);
+    }
 
     // last record received should be a COMMIT.
     ASSERT_EQ(resp.records.back().row_message().op(), RowMessage::COMMIT);
@@ -3688,6 +3719,7 @@ Result<string> CDCSDKYsqlTest::GetUniverseId(PostgresMiniCluster* cluster) {
 
   void CDCSDKYsqlTest::CheckRecordsConsistencyWithWriteId(
       const std::vector<CDCSDKProtoRecordPB>& records) {
+    RowMessage_Op prev_op;
     uint64_t prev_commit_time = 0;
     uint64_t prev_record_time = 0;
     uint32_t prev_write_id = 0;
@@ -3742,6 +3774,20 @@ Result<string> CDCSDKYsqlTest::GetUniverseId(PostgresMiniCluster* cluster) {
         prev_record_time = record.row_message().record_time();
         prev_write_id = record.cdc_sdk_op_id().write_id();
       }
+
+      if (record.row_message().op() == RowMessage::DDL) {
+        if (prev_op == RowMessage::DDL) {
+          // Two back to back DDLs should not have the same commit_time.
+          ASSERT_GT(record.row_message().commit_time(), prev_commit_time);
+        } else {
+          ASSERT_GE(record.row_message().commit_time(), prev_commit_time);
+        }
+        ASSERT_FALSE(record.row_message().has_pg_lsn());
+        ASSERT_FALSE(record.row_message().has_pg_transaction_id());
+        prev_commit_time = record.row_message().commit_time();
+      }
+
+      prev_op = record.row_message().op();
     }
   }
 
