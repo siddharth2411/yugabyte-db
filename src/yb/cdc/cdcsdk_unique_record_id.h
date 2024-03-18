@@ -23,12 +23,12 @@ class CDCSDKUniqueRecordID {
   explicit CDCSDKUniqueRecordID(const std::shared_ptr<CDCSDKProtoRecordPB>& record);
 
   explicit CDCSDKUniqueRecordID(
-      RowMessage_Op op, uint64_t commit_time, uint64_t record_time, std::string& table_id,
-      std::string& primary_key);
+      RowMessage_Op op, uint64_t commit_time, uint64_t record_time, uint32_t write_id,
+      std::string& table_id, std::string& primary_key);
 
   static bool CanFormUniqueRecordId(const std::shared_ptr<CDCSDKProtoRecordPB>& record);
 
-  bool lessThan(const std::shared_ptr<CDCSDKUniqueRecordID>& record);
+  bool lessThan(const std::shared_ptr<CDCSDKUniqueRecordID>& curr_record_unique_id);
 
   uint64_t GetCommitTime() const;
 
@@ -36,6 +36,7 @@ class CDCSDKUniqueRecordID {
   RowMessage_Op op_;
   uint64_t commit_time_;
   uint64_t record_time_;
+  uint32_t write_id_;
   std::string table_id_;
   std::string primary_key_;
 };

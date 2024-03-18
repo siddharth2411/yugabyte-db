@@ -18,11 +18,12 @@ namespace yb {
 namespace cdc {
 
 CDCSDKUniqueRecordID::CDCSDKUniqueRecordID(
-    RowMessage_Op op, uint64_t commit_time, uint64_t record_time, std::string& table_id,
-    std::string& primary_key)
+    RowMessage_Op op, uint64_t commit_time, uint64_t record_time, uint32_t write_id,
+    std::string& table_id, std::string& primary_key)
     : op_(op),
       commit_time_(commit_time),
       record_time_(record_time),
+      write_id_(write_id),
       table_id_(table_id),
       primary_key_(primary_key) {}
 
@@ -33,12 +34,14 @@ CDCSDKUniqueRecordID::CDCSDKUniqueRecordID(const std::shared_ptr<CDCSDKProtoReco
     case RowMessage_Op_DDL: FALLTHROUGH_INTENDED;
     case RowMessage_Op_BEGIN:
       this->record_time_ = 0;
+      this->write_id_ = 0;
       this->table_id_ = "";
       this->primary_key_ = "";
       break;
     case RowMessage_Op_SAFEPOINT: FALLTHROUGH_INTENDED;
     case RowMessage_Op_COMMIT:
       this->record_time_ = std::numeric_limits<uint64_t>::max();
+      this->write_id_ = std::numeric_limits<uint32_t>::max();
       this->table_id_ = "";
       this->primary_key_ = "";
       break;
@@ -46,6 +49,7 @@ CDCSDKUniqueRecordID::CDCSDKUniqueRecordID(const std::shared_ptr<CDCSDKProtoReco
     case RowMessage_Op_DELETE: FALLTHROUGH_INTENDED;
     case RowMessage_Op_UPDATE:
       this->record_time_ = record->row_message().record_time();
+      this->write_id_ = record->cdc_sdk_op_id().write_id();
       this->table_id_ = record->row_message().table_id();
       this->primary_key_ = record->row_message().primary_key();
       break;
@@ -75,7 +79,8 @@ bool CDCSDKUniqueRecordID::CanFormUniqueRecordId(
     case RowMessage_Op_UPDATE:
       return (
           record->row_message().has_commit_time() && record->row_message().has_record_time() &&
-          record->row_message().has_table_id() && record->row_message().has_primary_key());
+          record->cdc_sdk_op_id().has_write_id() && record->row_message().has_table_id() &&
+          record->row_message().has_primary_key());
       break;
     case RowMessage_Op_TRUNCATE: FALLTHROUGH_INTENDED;
     case RowMessage_Op_READ: FALLTHROUGH_INTENDED;
@@ -87,18 +92,22 @@ bool CDCSDKUniqueRecordID::CanFormUniqueRecordId(
   return false;
 }
 
-bool CDCSDKUniqueRecordID::lessThan(const std::shared_ptr<CDCSDKUniqueRecordID>& record) {
-  if (this->commit_time_ != record->commit_time_) {
-    return this->commit_time_ < record->commit_time_;
+bool CDCSDKUniqueRecordID::lessThan(
+    const std::shared_ptr<CDCSDKUniqueRecordID>& curr_record_unique_id) {
+  if (this->commit_time_ != curr_record_unique_id->commit_time_) {
+    return this->commit_time_ < curr_record_unique_id->commit_time_;
   }
-  if (this->record_time_ != record->record_time_) {
-    return this->record_time_ < record->record_time_;
+  if (this->record_time_ != curr_record_unique_id->record_time_) {
+    return this->record_time_ < curr_record_unique_id->record_time_;
   }
-  if (this->table_id_ != record->table_id_) {
-    return this->table_id_ < record->table_id_;
+  if (this->write_id_ != curr_record_unique_id->write_id_) {
+    return this->write_id_ < curr_record_unique_id->write_id_;
+  }
+  if (this->table_id_ != curr_record_unique_id->table_id_) {
+    return this->table_id_ < curr_record_unique_id->table_id_;
   }
 
-  return this->primary_key_ < record->primary_key_;
+  return this->primary_key_ < curr_record_unique_id->primary_key_;
 }
 
 }  // namespace cdc

@@ -118,7 +118,7 @@ TEST_F(CDCSDKConsumptionConsistentChangesTest, TestExplicitCheckpointForSingleSh
   VerifyExplicitCheckpointingOnTablets(
       stream_id, initial_tablet_checkpoint, tablets, expected_tablet_ids_with_progress);
 
-  CheckRecordsConsistencyWithWriteId(get_consistent_changes_resp.records);
+  CheckRecordsConsistencyFromVWAL(get_consistent_changes_resp.records);
   CheckRecordCount(get_consistent_changes_resp, expected_dml_records);
 }
 
@@ -171,7 +171,7 @@ TEST_F(CDCSDKConsumptionConsistentChangesTest, TestExplicitCheckpointForMultiSha
 
   VerifyExplicitCheckpointingOnTablets(
       stream_id, initial_tablet_checkpoint, tablets, expected_tablet_ids_with_progress);
-  CheckRecordsConsistencyWithWriteId(get_consistent_changes_resp.records);
+  CheckRecordsConsistencyFromVWAL(get_consistent_changes_resp.records);
   CheckRecordCount(get_consistent_changes_resp, expected_dml_records);
 }
 
@@ -260,7 +260,7 @@ void CDCSDKConsumptionConsistentChangesTest::TestConcurrentConsumptionFromMultip
     VerifyExplicitCheckpointingOnTablets(
         stream_id_1, initial_tablet_checkpoint_table_1, table_1_tablets,
         expected_table_one_tablets_with_progress);
-    CheckRecordsConsistencyWithWriteId(get_consistent_changes_resp.records);
+    CheckRecordsConsistencyFromVWAL(get_consistent_changes_resp.records);
     CheckRecordCount(get_consistent_changes_resp, expected_dml_records_table_1);
   });
 
@@ -276,7 +276,7 @@ void CDCSDKConsumptionConsistentChangesTest::TestConcurrentConsumptionFromMultip
     VerifyExplicitCheckpointingOnTablets(
         stream_id_2, initial_tablet_checkpoint_table_2, table_2_tablets,
         expected_table_two_tablets_with_progress);
-    CheckRecordsConsistencyWithWriteId(get_consistent_changes_resp.records);
+    CheckRecordsConsistencyFromVWAL(get_consistent_changes_resp.records);
     CheckRecordCount(get_consistent_changes_resp, expected_dml_records_table_2);
   });
 
@@ -792,7 +792,7 @@ TEST_F(CDCSDKConsumptionConsistentChangesTest, TestCDCSDKConsistentStreamWithGen
       stream_id, {table.table_id()}, expected_dml_records, true /* init_virtual_wal */));
   LOG(INFO) << "Got " << get_consistent_changes_resp.records.size() << " records.";
 
-  CheckRecordsConsistencyWithWriteId(get_consistent_changes_resp.records);
+  CheckRecordsConsistencyFromVWAL(get_consistent_changes_resp.records);
   CheckRecordCount(get_consistent_changes_resp, expected_dml_records);
 }
 
@@ -825,7 +825,7 @@ TEST_F(CDCSDKConsumptionConsistentChangesTest, TestCDCSDKConsistentStreamWithMan
       stream_id, {table.table_id()}, expected_dml_records, true /* init_virtual_wal */));
   LOG(INFO) << "Got " << get_consistent_changes_resp.records.size() << " records.";
 
-  CheckRecordsConsistencyWithWriteId(get_consistent_changes_resp.records);
+  CheckRecordsConsistencyFromVWAL(get_consistent_changes_resp.records);
   CheckRecordCount(get_consistent_changes_resp, expected_dml_records);
 }
 
@@ -886,7 +886,7 @@ TEST_F(CDCSDKConsumptionConsistentChangesTest, TestCDCSDKConsistentStreamWithFor
       stream_id, {table2.table_id()}, expected_dml_records, true /* init_virtual_wal */));
   LOG(INFO) << "Got " << get_consistent_changes_resp.records.size() << " records.";
 
-  CheckRecordsConsistencyWithWriteId(get_consistent_changes_resp.records);
+  CheckRecordsConsistencyFromVWAL(get_consistent_changes_resp.records);
   CheckRecordCount(get_consistent_changes_resp, expected_dml_records);
 }
 
@@ -936,7 +936,7 @@ TEST_F(CDCSDKConsumptionConsistentChangesTest, TestCDCSDKConsistentStreamWithAbo
       stream_id, {table.table_id()}, expected_dml_records, true /* init_virtual_wal */));
   LOG(INFO) << "Got " << get_consistent_changes_resp.records.size() << " records.";
 
-  CheckRecordsConsistencyWithWriteId(get_consistent_changes_resp.records);
+  CheckRecordsConsistencyFromVWAL(get_consistent_changes_resp.records);
   CheckRecordCount(get_consistent_changes_resp, expected_dml_records);
 }
 
@@ -993,7 +993,7 @@ TEST_F(CDCSDKConsumptionConsistentChangesTest, TestCDCSDKConsistentStreamWithCol
       stream_id, table_ids, expected_dml_records, true /* init_virtual_wal */));
   LOG(INFO) << "Got " << get_consistent_changes_resp.records.size() << " records.";
 
-  CheckRecordsConsistencyWithWriteId(get_consistent_changes_resp.records);
+  CheckRecordsConsistencyFromVWAL(get_consistent_changes_resp.records);
   CheckRecordCount(get_consistent_changes_resp, expected_dml_records);
 }
 
@@ -1075,7 +1075,7 @@ TEST_F(CDCSDKConsumptionConsistentChangesTest, TestVWALConsumptionOnMixTables) {
       stream_id, table_ids, expected_dml_records, true /* init_virtual_wal */));
   LOG(INFO) << "Got " << get_consistent_changes_resp.records.size() << " records.";
 
-  CheckRecordsConsistencyWithWriteId(get_consistent_changes_resp.records);
+  CheckRecordsConsistencyFromVWAL(get_consistent_changes_resp.records);
   CheckRecordCount(get_consistent_changes_resp, expected_dml_records);
 }
 
@@ -1139,7 +1139,7 @@ TEST_F(CDCSDKConsumptionConsistentChangesTest, TestCDCSDKConsistentStreamWithTab
       stream_id, {table.table_id()}, expected_dml_records, true /* init_virtual_wal */));
   LOG(INFO) << "Got " << get_consistent_changes_resp.records.size() << " records.";
 
-  CheckRecordsConsistencyWithWriteId(get_consistent_changes_resp.records);
+  CheckRecordsConsistencyFromVWAL(get_consistent_changes_resp.records);
   CheckRecordCount(get_consistent_changes_resp, expected_dml_records);
 }
 
@@ -1205,7 +1205,7 @@ TEST_F(CDCSDKConsumptionConsistentChangesTest, TestCDCSDKMakesProgressWithLongRu
       },
       MonoDelta::FromSeconds(60), "Did not see all expected records"));
 
-  CheckRecordsConsistencyWithWriteId(records);
+  CheckRecordsConsistencyFromVWAL(records);
 }
 
 TEST_F(CDCSDKConsumptionConsistentChangesTest, TestConsistentSnapshotWithCDCSDKConsistentStream) {
@@ -1275,7 +1275,7 @@ TEST_F(CDCSDKConsumptionConsistentChangesTest, TestConsistentSnapshotWithCDCSDKC
       stream_id, {table.table_id()}, expected_dml_records, true /* init_virtual_wal */));
   LOG(INFO) << "Got " << get_consistent_changes_resp.records.size() << " records.";
 
-  CheckRecordsConsistencyWithWriteId(get_consistent_changes_resp.records);
+  CheckRecordsConsistencyFromVWAL(get_consistent_changes_resp.records);
   CheckRecordCount(get_consistent_changes_resp, expected_dml_records);
 }
 

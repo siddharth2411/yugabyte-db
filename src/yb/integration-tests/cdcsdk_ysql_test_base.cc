@@ -3695,13 +3695,15 @@ Result<string> CDCSDKYsqlTest::GetUniverseId(PostgresMiniCluster* cluster) {
     ASSERT_EQ(commit_records, last_txn_id);
   }
 
-  void CDCSDKYsqlTest::CheckRecordsConsistencyWithWriteId(
+  void CDCSDKYsqlTest::CheckRecordsConsistencyFromVWAL(
       const std::vector<CDCSDKProtoRecordPB>& records) {
     uint64_t prev_commit_time = 0;
     uint64_t prev_record_time = 0;
-    uint32_t prev_write_id = 0;
+    TableId prev_table_id = "";
+    std::string prev_primary_key = "";
     uint64_t prev_lsn = 0;
     uint64_t prev_txn_id = 0;
+    uint32_t prev_write_id = 0;
     bool in_transaction = false;
     bool first_record_in_transaction = false;
     for (auto& record : records) {
@@ -3713,6 +3715,8 @@ Result<string> CDCSDKYsqlTest::GetUniverseId(PostgresMiniCluster* cluster) {
         ASSERT_GT(record.row_message().commit_time(), prev_commit_time);
         ASSERT_GT(record.row_message().pg_lsn(), prev_lsn);
         ASSERT_GT(record.row_message().pg_transaction_id(), prev_txn_id);
+        ASSERT_FALSE(record.row_message().has_table_id());
+        ASSERT_FALSE(record.row_message().has_primary_key());
         prev_commit_time = record.row_message().commit_time();
         prev_lsn = record.row_message().pg_lsn();
         prev_txn_id = record.row_message().pg_transaction_id();
@@ -3725,6 +3729,8 @@ Result<string> CDCSDKYsqlTest::GetUniverseId(PostgresMiniCluster* cluster) {
         ASSERT_GT(record.row_message().pg_lsn(), prev_lsn);
         // PG txn_id should be same as the BEGIN record of the current txn.
         ASSERT_EQ(record.row_message().pg_transaction_id(), prev_txn_id);
+        ASSERT_FALSE(record.row_message().has_table_id());
+        ASSERT_FALSE(record.row_message().has_primary_key());
         prev_commit_time = record.row_message().commit_time();
         prev_lsn = record.row_message().pg_lsn();
       }
@@ -3733,6 +3739,8 @@ Result<string> CDCSDKYsqlTest::GetUniverseId(PostgresMiniCluster* cluster) {
           record.row_message().op() == RowMessage::UPDATE ||
           record.row_message().op() == RowMessage::DELETE) {
         ASSERT_TRUE(in_transaction);
+        ASSERT_TRUE(record.row_message().has_table_id());
+        ASSERT_TRUE(record.row_message().has_primary_key());
         ASSERT_EQ(record.row_message().commit_time(), prev_commit_time);
         ASSERT_GT(record.row_message().pg_lsn(), prev_lsn);
         // PG txn_id should be same as the BEGIN record of the current txn.
@@ -3744,11 +3752,19 @@ Result<string> CDCSDKYsqlTest::GetUniverseId(PostgresMiniCluster* cluster) {
           ASSERT_GE(record.row_message().record_time(), prev_record_time);
           if (record.row_message().record_time() == prev_record_time) {
             ASSERT_GE(record.cdc_sdk_op_id().write_id(), prev_write_id);
+            if (record.cdc_sdk_op_id().write_id() == prev_write_id) {
+              ASSERT_GE(record.row_message().table_id(), prev_table_id);
+              if (record.row_message().table_id() == prev_table_id) {
+                ASSERT_GT(record.row_message().primary_key(), prev_primary_key);
+              }
+            }
           }
         }
 
         first_record_in_transaction = false;
         prev_record_time = record.row_message().record_time();
+        prev_table_id = record.row_message().table_id();
+        prev_primary_key = record.row_message().primary_key();
         prev_write_id = record.cdc_sdk_op_id().write_id();
       }
     }
