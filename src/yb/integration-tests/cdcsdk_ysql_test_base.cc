@@ -3743,6 +3743,7 @@ Result<string> CDCSDKYsqlTest::GetUniverseId(PostgresMiniCluster* cluster) {
     std::string prev_primary_key = "";
     uint64_t prev_lsn = 0;
     uint64_t prev_txn_id = 0;
+    uint32_t prev_write_id = 0;
     bool in_transaction = false;
     bool first_record_in_transaction = false;
     for (auto& record : records) {
@@ -3790,9 +3791,12 @@ Result<string> CDCSDKYsqlTest::GetUniverseId(PostgresMiniCluster* cluster) {
         if (!first_record_in_transaction) {
           ASSERT_GE(record.row_message().record_time(), prev_record_time);
           if (record.row_message().record_time() == prev_record_time) {
-            ASSERT_GE(record.row_message().table_id(), prev_table_id);
-            if(record.row_message().table_id() == prev_table_id) {
-              ASSERT_GT(record.row_message().primary_key(), prev_primary_key);
+            ASSERT_GE(record.cdc_sdk_op_id().write_id(), prev_write_id);
+            if (record.cdc_sdk_op_id().write_id() == prev_write_id) {
+              ASSERT_GE(record.row_message().table_id(), prev_table_id);
+              if (record.row_message().table_id() == prev_table_id) {
+                ASSERT_GT(record.row_message().primary_key(), prev_primary_key);
+              }
             }
           }
         }
@@ -3801,6 +3805,7 @@ Result<string> CDCSDKYsqlTest::GetUniverseId(PostgresMiniCluster* cluster) {
         prev_record_time = record.row_message().record_time();
         prev_table_id = record.row_message().table_id();
         prev_primary_key = record.row_message().primary_key();
+        prev_write_id = record.cdc_sdk_op_id().write_id();
       }
     }
   }

@@ -134,6 +134,12 @@ class CDCSDKVirtualWAL {
 
   std::unordered_set<TableId> publication_table_list_;
 
+  // The primary requirement of this map is to efficiently retrieve the table_id of a tablet
+  // whenever we plan to call GetTabletListToPoll on a tablet to get children tablets when it is
+  // split. It is safe to get the first element of the corresponsding set. Note that, tablet entry
+  // for colocated tables can have a set with more than 1 element. But this map will never be used
+  // in the case of a tablet hosting colocated tables since such a tablet is never expected to
+  // split.
   std::unordered_map<TabletId, std::unordered_set<TableId>> tablet_id_to_table_id_map_;
 
   // Tablet queues hold the records received from GetChanges RPC call on their respective tablets.
