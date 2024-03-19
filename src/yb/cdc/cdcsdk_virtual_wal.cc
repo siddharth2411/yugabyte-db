@@ -249,21 +249,24 @@ Status CDCSDKVirtualWAL::GetConsistentChangesInternal(
     if (!lsn_result.ok()) {
       VLOG(2) << "Couldnt generate LSN for record: " << record->DebugString();
       VLOG(2) << "Rejected record's unique_record_id: " << unique_id->ToString()
-              << ", Received from tablet_id: " << tablet_id
-              << ", Last_seen_unique_record_id: " << last_seen_unique_record_id_->ToString();
+              << ", Last_seen_unique_record_id: " << last_seen_unique_record_id_->ToString()
+              << ", Rejected record received from tablet_id: " << tablet_id
+              << ", Last_shipped_record's tablet_id: " << last_shipped_record_tablet_id;
     }
 
     if (!txn_id_result.ok()) {
       VLOG(2) << "Couldnt generate txnID for record: " << record->DebugString();
       VLOG(2) << "Rejected record's unique_record_id: " << unique_id->ToString()
-              << ", Received from tablet_id: " << tablet_id
-              << ", Last_seen_unique_record_id: " << last_seen_unique_record_id_->ToString();
+              << ", Last_seen_unique_record_id: " << last_seen_unique_record_id_->ToString()
+              << ", Rejected record received from tablet_id: " << tablet_id
+              << ", Last_shipped_record's tablet_id: " << last_shipped_record_tablet_id;
     }
 
     if (lsn_result.ok() && txn_id_result.ok()) {
       row_message->set_pg_lsn(*lsn_result);
       row_message->set_pg_transaction_id(*txn_id_result);
       last_seen_unique_record_id_ = unique_id;
+      last_shipped_record_tablet_id = tablet_id;
 
       metadata.txn_ids.insert(row_message->pg_transaction_id());
       metadata.min_txn_id = std::min(metadata.min_txn_id, row_message->pg_transaction_id());

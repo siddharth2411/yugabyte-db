@@ -154,6 +154,7 @@ class CDCSDKVirtualWAL {
   uint64_t last_seen_lsn_;
   uint32_t last_seen_txn_id_;
   std::shared_ptr<CDCSDKUniqueRecordID> last_seen_unique_record_id_;
+  TabletId last_shipped_record_tablet_id = "";
 
   // This will hold the restart_lsn value received in the UpdateAndPersistLSN RPC call. It will
   // initialised by the restart_lsn stores in the cdc_state's entry for slot.
