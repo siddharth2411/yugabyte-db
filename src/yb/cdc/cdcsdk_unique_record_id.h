@@ -32,6 +32,8 @@ class CDCSDKUniqueRecordID {
 
   uint64_t GetCommitTime() const;
 
+  std::string ToString() const;
+
  private:
   RowMessage_Op op_;
   uint64_t commit_time_;

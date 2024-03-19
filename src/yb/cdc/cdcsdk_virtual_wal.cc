@@ -234,16 +234,32 @@ Status CDCSDKVirtualWAL::GetConsistentChangesInternal(
   auto max_records = static_cast<int>(FLAGS_cdcsdk_max_consistent_records);
   while (resp->cdc_sdk_proto_records_size() < max_records && !sorted_records.empty() &&
          empty_tablet_queues.size() == 0) {
-    auto next_record = VERIFY_RESULT(
+    auto tablet_record_info_pair = VERIFY_RESULT(
         FindConsistentRecord(stream_id, &sorted_records, &empty_tablet_queues, hostport, deadline));
-    auto unique_id = next_record.first;
-    auto record = next_record.second;
+    auto tablet_id = tablet_record_info_pair.first;
+    auto unique_id = tablet_record_info_pair.second.first;
+    auto record = tablet_record_info_pair.second.second;
     if (record->row_message().op() == RowMessage_Op_SAFEPOINT) {
       continue;
     }
     auto row_message = record->mutable_row_message();
     auto lsn_result = GetRecordLSN(unique_id);
     auto txn_id_result = GetRecordTxnID(unique_id);
+
+    if (!lsn_result.ok()) {
+      VLOG(2) << "Couldnt generate LSN for record: " << record->DebugString();
+      VLOG(2) << "Rejected record's unique_record_id: " << unique_id->ToString()
+              << ", Received from tablet_id: " << tablet_id
+              << ", Last_seen_unique_record_id: " << last_seen_unique_record_id_->ToString();
+    }
+
+    if (!txn_id_result.ok()) {
+      VLOG(2) << "Couldnt generate txnID for record: " << record->DebugString();
+      VLOG(2) << "Rejected record's unique_record_id: " << unique_id->ToString()
+              << ", Received from tablet_id: " << tablet_id
+              << ", Last_seen_unique_record_id: " << last_seen_unique_record_id_->ToString();
+    }
+
     if (lsn_result.ok() && txn_id_result.ok()) {
       row_message->set_pg_lsn(*lsn_result);
       row_message->set_pg_transaction_id(*txn_id_result);
@@ -275,8 +291,6 @@ Status CDCSDKVirtualWAL::GetConsistentChangesInternal(
       }
       auto records = resp->add_cdc_sdk_proto_records();
       records->CopyFrom(*record);
-    } else {
-      VLOG(2) << "Couldnt generate LSN & txnID for record: " << record->DebugString();
     }
   }
 
@@ -472,13 +486,12 @@ Status CDCSDKVirtualWAL::AddRecordToVirtualWalPriorityQueue(
   return Status::OK();
 }
 
-Result<RecordInfo> CDCSDKVirtualWAL::FindConsistentRecord(
+Result<TabletRecordInfoPair> CDCSDKVirtualWAL::FindConsistentRecord(
     const xrepl::StreamId& stream_id, TabletRecordPriorityQueue* sorted_records,
     std::vector<TabletId>* empty_tablet_queues, const HostPort hostport,
     const CoarseTimePoint deadline) {
   auto tablet_record_info_pair = sorted_records->top();
   auto tablet_id = tablet_record_info_pair.first;
-  auto record_info = tablet_record_info_pair.second;
   sorted_records->pop();
   tablet_queues_[tablet_id].pop();
 
@@ -488,7 +501,7 @@ Result<RecordInfo> CDCSDKVirtualWAL::FindConsistentRecord(
     empty_tablet_queues->push_back(tablet_id);
   }
 
-  return record_info;
+  return tablet_record_info_pair;
 }
 
 Result<uint64_t> CDCSDKVirtualWAL::GetRecordLSN(

@@ -121,7 +121,7 @@ class CDCSDKVirtualWAL {
   Status AddRecordToVirtualWalPriorityQueue(
       const TabletId& tablet_id, TabletRecordPriorityQueue* sorted_records);
 
-  Result<RecordInfo> FindConsistentRecord(
+  Result<TabletRecordInfoPair> FindConsistentRecord(
       const xrepl::StreamId& stream_id, TabletRecordPriorityQueue* sorted_records,
       std::vector<TabletId>* empty_tablet_queues, const HostPort hostport,
       const CoarseTimePoint deadline);

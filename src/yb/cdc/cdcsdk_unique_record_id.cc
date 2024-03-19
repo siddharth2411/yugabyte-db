@@ -11,6 +11,7 @@
 // under the License.
 
 #include "yb/cdc/cdcsdk_unique_record_id.h"
+#include "yb/util/format.h"
 #include "yb/util/logging.h"
 
 namespace yb {
@@ -108,6 +109,49 @@ bool CDCSDKUniqueRecordID::lessThan(
   }
 
   return this->primary_key_ < curr_record_unique_id->primary_key_;
+}
+
+std::string CDCSDKUniqueRecordID::ToString() const {
+  std::string result = "";
+  switch (op_) {
+    case RowMessage_Op_DDL:
+      result = Format("op: DDL");
+      break;
+    case RowMessage_Op_BEGIN:
+      result = Format("op: BEGIN");
+      break;
+    case RowMessage_Op_COMMIT:
+      result = Format("op: COMMIT");
+      break;
+    case RowMessage_Op_SAFEPOINT:
+      result = Format("op: SAFEPOINT");
+      break;
+    case RowMessage_Op_INSERT:
+      result = Format("op: INSERT");
+      break;
+    case RowMessage_Op_DELETE:
+      result = Format("op: DELETE");
+      break;
+    case RowMessage_Op_UPDATE:
+      result = Format("op: UPDATE");
+      break;
+    case RowMessage_Op_TRUNCATE:
+      result = Format("op: TRUNCATE");
+      break;
+    case RowMessage_Op_READ:
+      result = Format("op: READ");
+      break;
+    case RowMessage_Op_UNKNOWN:
+      result = Format("op: UNKNOWN");
+      break;
+  }
+
+  result += Format(", commit_time: $0", commit_time_);
+  result += Format(", record_time: $0", record_time_);
+  result += Format(", write_id: $0", write_id_);
+  result += Format(", table_id: $0", table_id_);
+  result += Format(", encoded_primary_key: $0", primary_key_);
+  return result;
 }
 
 }  // namespace cdc
