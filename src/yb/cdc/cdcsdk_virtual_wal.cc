@@ -637,11 +637,11 @@ Status CDCSDKVirtualWAL::UpdateSlotEntryInCDCState(
 }
 
 bool CDCSDKVirtualWAL::CompareCDCSDKProtoRecords::operator()(
-    const TabletRecordInfoPair& lhs, const TabletRecordInfoPair& rhs) const {
-  auto lhs_record_id = lhs.second.first;
-  auto rhs_record_id = rhs.second.first;
+    const TabletRecordInfoPair& new_record, const TabletRecordInfoPair& old_record) const {
+  auto old_record_id = old_record.second.first;
+  auto new_record_id = new_record.second.first;
 
-  return !lhs_record_id->lessThan(rhs_record_id);
+  return old_record_id->lessThan(new_record_id);
 }
 
 }  // namespace cdc
