@@ -19,10 +19,11 @@ namespace yb {
 namespace cdc {
 
 CDCSDKUniqueRecordID::CDCSDKUniqueRecordID(
-    RowMessage_Op op, uint64_t commit_time, uint64_t record_time, uint32_t write_id,
-    std::string& table_id, std::string& primary_key)
+    RowMessage_Op op, uint64_t commit_time, std::string& docdb_txn_id, uint64_t record_time,
+    uint32_t write_id, std::string& table_id, std::string& primary_key)
     : op_(op),
       commit_time_(commit_time),
+      docdb_txn_id_(docdb_txn_id),
       record_time_(record_time),
       write_id_(write_id),
       table_id_(table_id),
@@ -34,6 +35,7 @@ CDCSDKUniqueRecordID::CDCSDKUniqueRecordID(const std::shared_ptr<CDCSDKProtoReco
   switch (this->op_) {
     case RowMessage_Op_DDL: FALLTHROUGH_INTENDED;
     case RowMessage_Op_BEGIN:
+    this->docdb_txn_id_ = "";
       this->record_time_ = 0;
       this->write_id_ = 0;
       this->table_id_ = "";
@@ -41,6 +43,7 @@ CDCSDKUniqueRecordID::CDCSDKUniqueRecordID(const std::shared_ptr<CDCSDKProtoReco
       break;
     case RowMessage_Op_SAFEPOINT: FALLTHROUGH_INTENDED;
     case RowMessage_Op_COMMIT:
+      this->docdb_txn_id_ = "";
       this->record_time_ = std::numeric_limits<uint64_t>::max();
       this->write_id_ = std::numeric_limits<uint32_t>::max();
       this->table_id_ = "";
@@ -49,6 +52,11 @@ CDCSDKUniqueRecordID::CDCSDKUniqueRecordID(const std::shared_ptr<CDCSDKProtoReco
     case RowMessage_Op_INSERT: FALLTHROUGH_INTENDED;
     case RowMessage_Op_DELETE: FALLTHROUGH_INTENDED;
     case RowMessage_Op_UPDATE:
+      if (record->row_message().has_transaction_id()) {
+        this->docdb_txn_id_ = record->row_message().transaction_id();
+      } else {
+        this->docdb_txn_id_ = "";
+      }
       this->record_time_ = record->row_message().record_time();
       this->write_id_ = record->cdc_sdk_op_id().write_id();
       this->table_id_ = record->row_message().table_id();
@@ -93,11 +101,25 @@ bool CDCSDKUniqueRecordID::CanFormUniqueRecordId(
   return false;
 }
 
+bool IsCommitOrSafepointOp(const RowMessage_Op op) {
+  return op == RowMessage_Op_COMMIT || op == RowMessage_Op_SAFEPOINT;
+}
+
 bool CDCSDKUniqueRecordID::lessThan(
     const std::shared_ptr<CDCSDKUniqueRecordID>& curr_record_unique_id) {
   if (this->commit_time_ != curr_record_unique_id->commit_time_) {
     return this->commit_time_ < curr_record_unique_id->commit_time_;
   }
+
+  if (this->docdb_txn_id_ != curr_record_unique_id->docdb_txn_id_) {
+    // If either of the record is a COMMIT/SAFEPOINT, it should be given lower priority.
+    if (IsCommitOrSafepointOp(this->op_) || IsCommitOrSafepointOp(curr_record_unique_id->op_)) {
+      return !(IsCommitOrSafepointOp(this->op_));
+    } else {
+      return this->docdb_txn_id_ < curr_record_unique_id->docdb_txn_id_;
+    }
+  }
+
   if (this->record_time_ != curr_record_unique_id->record_time_) {
     return this->record_time_ < curr_record_unique_id->record_time_;
   }
@@ -147,6 +169,7 @@ std::string CDCSDKUniqueRecordID::ToString() const {
   }
 
   result += Format(", commit_time: $0", commit_time_);
+  result += Format(", docdb_txn_id: $0", docdb_txn_id_);
   result += Format(", record_time: $0", record_time_);
   result += Format(", write_id: $0", write_id_);
   result += Format(", table_id: $0", table_id_);

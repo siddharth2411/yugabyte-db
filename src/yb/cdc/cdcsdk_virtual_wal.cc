@@ -187,11 +187,13 @@ Status CDCSDKVirtualWAL::InitLSNAndTxnIDGenerators(const xrepl::StreamId& stream
   auto commit_time = *entry_opt->record_id_commit_time;
   // Values from the slot's entry will be used to form a unique record ID corresponding to a COMMIT
   // record with commit_time set to the record_id_commit_time field of the state table.
+  std::string commit_record_docdb_txn_id = "";
   TabletId commit_record_table_id = "";
   std::string commit_record_primary_key = "";
   last_seen_unique_record_id_ = std::make_shared<CDCSDKUniqueRecordID>(CDCSDKUniqueRecordID(
-      RowMessage::COMMIT, commit_time, std::numeric_limits<uint64_t>::max(),
-      std::numeric_limits<uint32_t>::max(), commit_record_table_id, commit_record_primary_key));
+      RowMessage::COMMIT, commit_time, commit_record_docdb_txn_id,
+      std::numeric_limits<uint64_t>::max(), std::numeric_limits<uint32_t>::max(),
+      commit_record_table_id, commit_record_primary_key));
 
   last_shipped_commit.commit_lsn = last_seen_lsn_;
   last_shipped_commit.commit_txn_id = last_seen_txn_id_;
