@@ -149,6 +149,15 @@ bool CDCSDKUniqueRecordID::CanGenerateLSN(
     return last_seen_unique_record_id->commit_time_ < curr_unique_record_id->commit_time_;
   }
 
+  // Although Safepoint record is never sent to LSN generator, we require this check here because we
+  // hold a commit record for a txn until we are sure that all DMLs having the same commit_time are
+  // shipped. During this process of holding the commit record, we peek the PQ and compare the
+  // stored commit record's unique id with the peeked entry that can be a SAFEPOINT record. Hence,
+  // we need this check so that in the described case, we are able to ship the commit record.
+  if (IsSafepointOp(last_seen_unique_record_id->op_) || IsSafepointOp(curr_unique_record_id->op_)) {
+    return !(IsSafepointOp(last_seen_unique_record_id->op_));
+  }
+
   // Skip comparing docdb_txn_id if the current record is a BEGIN/COMMIT record since we want to
   // ship all txns with same commit_time in a single txn from VWAL.
   if (!IsBeginOrCommitOp(last_seen_unique_record_id->op_) &&
