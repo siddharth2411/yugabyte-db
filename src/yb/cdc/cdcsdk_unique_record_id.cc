@@ -101,36 +101,78 @@ bool CDCSDKUniqueRecordID::CanFormUniqueRecordId(
   return false;
 }
 
-bool IsCommitOrSafepointOp(const RowMessage_Op op) {
-  return op == RowMessage_Op_COMMIT || op == RowMessage_Op_SAFEPOINT;
+bool IsSafepointOp(const RowMessage_Op op) {
+  return op == RowMessage_Op_SAFEPOINT;
+}
+
+bool IsCommitOp(const RowMessage_Op op) {
+  return op == RowMessage_Op_COMMIT;
+}
+
+bool IsBeginOrCommitOp(const RowMessage_Op op) {
+  return op == RowMessage_Op_BEGIN || op == RowMessage_Op_COMMIT;
 }
 
 bool CDCSDKUniqueRecordID::lessThan(
-    const std::shared_ptr<CDCSDKUniqueRecordID>& curr_record_unique_id) {
-  if (this->commit_time_ != curr_record_unique_id->commit_time_) {
-    return this->commit_time_ < curr_record_unique_id->commit_time_;
+    const std::shared_ptr<CDCSDKUniqueRecordID>& curr_unique_record_id) {
+  if (this->commit_time_ != curr_unique_record_id->commit_time_) {
+    return this->commit_time_ < curr_unique_record_id->commit_time_;
   }
 
-  if (this->docdb_txn_id_ != curr_record_unique_id->docdb_txn_id_) {
-    // If either of the record is a COMMIT/SAFEPOINT, it should be given lower priority.
-    if (IsCommitOrSafepointOp(this->op_) || IsCommitOrSafepointOp(curr_record_unique_id->op_)) {
-      return !(IsCommitOrSafepointOp(this->op_));
-    } else {
-      return this->docdb_txn_id_ < curr_record_unique_id->docdb_txn_id_;
+  // Safepoint record should always get the lowest priority in PQ.
+  if (IsSafepointOp(this->op_) || IsSafepointOp(curr_unique_record_id->op_)) {
+    return !(IsSafepointOp(this->op_));
+  }
+
+  if (this->docdb_txn_id_ != curr_unique_record_id->docdb_txn_id_) {
+    return this->docdb_txn_id_ < curr_unique_record_id->docdb_txn_id_;
+  }
+
+  if (this->record_time_ != curr_unique_record_id->record_time_) {
+    return this->record_time_ < curr_unique_record_id->record_time_;
+  }
+
+  if (this->write_id_ != curr_unique_record_id->write_id_) {
+    return this->write_id_ < curr_unique_record_id->write_id_;
+  }
+
+  if (this->table_id_ != curr_unique_record_id->table_id_) {
+    return this->table_id_ < curr_unique_record_id->table_id_;
+  }
+
+  return this->primary_key_ < curr_unique_record_id->primary_key_;
+}
+
+// Return true iff, curr_unique_record_id > last_seen_unique_record_id
+bool CDCSDKUniqueRecordID::CanGenerateLSN(
+    const std::shared_ptr<CDCSDKUniqueRecordID>& last_seen_unique_record_id,
+    const std::shared_ptr<CDCSDKUniqueRecordID>& curr_unique_record_id) {
+  if (last_seen_unique_record_id->commit_time_ != curr_unique_record_id->commit_time_) {
+    return last_seen_unique_record_id->commit_time_ < curr_unique_record_id->commit_time_;
+  }
+
+  // Skip comparing docdb_txn_id if the current record is a BEGIN/COMMIT record since we want to
+  // ship all txns with same commit_time in a single txn from VWAL.
+  if (!IsBeginOrCommitOp(last_seen_unique_record_id->op_) &&
+      !IsBeginOrCommitOp(curr_unique_record_id->op_)) {
+    if (last_seen_unique_record_id->docdb_txn_id_ != curr_unique_record_id->docdb_txn_id_) {
+      return last_seen_unique_record_id->docdb_txn_id_ < curr_unique_record_id->docdb_txn_id_;
     }
   }
 
-  if (this->record_time_ != curr_record_unique_id->record_time_) {
-    return this->record_time_ < curr_record_unique_id->record_time_;
-  }
-  if (this->write_id_ != curr_record_unique_id->write_id_) {
-    return this->write_id_ < curr_record_unique_id->write_id_;
-  }
-  if (this->table_id_ != curr_record_unique_id->table_id_) {
-    return this->table_id_ < curr_record_unique_id->table_id_;
+  if (last_seen_unique_record_id->record_time_ != curr_unique_record_id->record_time_) {
+    return last_seen_unique_record_id->record_time_ < curr_unique_record_id->record_time_;
   }
 
-  return this->primary_key_ < curr_record_unique_id->primary_key_;
+  if (last_seen_unique_record_id->write_id_ != curr_unique_record_id->write_id_) {
+    return last_seen_unique_record_id->write_id_ < curr_unique_record_id->write_id_;
+  }
+
+  if (last_seen_unique_record_id->table_id_ != curr_unique_record_id->table_id_) {
+    return last_seen_unique_record_id->table_id_ < curr_unique_record_id->table_id_;
+  }
+
+  return last_seen_unique_record_id->primary_key_ < curr_unique_record_id->primary_key_;
 }
 
 std::string CDCSDKUniqueRecordID::ToString() const {

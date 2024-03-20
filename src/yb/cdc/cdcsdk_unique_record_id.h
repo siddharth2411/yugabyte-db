@@ -28,7 +28,13 @@ class CDCSDKUniqueRecordID {
 
   static bool CanFormUniqueRecordId(const std::shared_ptr<CDCSDKProtoRecordPB>& record);
 
-  bool lessThan(const std::shared_ptr<CDCSDKUniqueRecordID>& curr_record_unique_id);
+  // This method will be used by the Virtual WAL's Priority queue to sort records in the PQ.
+  bool lessThan(const std::shared_ptr<CDCSDKUniqueRecordID>& curr_unique_record_id);
+
+  // This method will be used by the LSN generator.
+  static bool CanGenerateLSN(
+      const std::shared_ptr<CDCSDKUniqueRecordID>& last_seen_unique_record_id,
+      const std::shared_ptr<CDCSDKUniqueRecordID>& curr_unique_record_id);
 
   uint64_t GetCommitTime() const;
 
