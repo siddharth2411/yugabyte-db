@@ -35,7 +35,7 @@ CDCSDKUniqueRecordID::CDCSDKUniqueRecordID(const std::shared_ptr<CDCSDKProtoReco
   switch (this->op_) {
     case RowMessage_Op_DDL: FALLTHROUGH_INTENDED;
     case RowMessage_Op_BEGIN:
-    this->docdb_txn_id_ = "";
+      this->docdb_txn_id_ = "";
       this->record_time_ = 0;
       this->write_id_ = 0;
       this->table_id_ = "";
