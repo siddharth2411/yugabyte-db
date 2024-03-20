@@ -236,14 +236,29 @@ Status CDCSDKVirtualWAL::GetConsistentChangesInternal(
   auto max_records = static_cast<int>(FLAGS_cdcsdk_max_consistent_records);
   while (resp->cdc_sdk_proto_records_size() < max_records && !sorted_records.empty() &&
          empty_tablet_queues.size() == 0) {
-    auto tablet_record_info_pair = VERIFY_RESULT(
-        FindConsistentRecord(stream_id, &sorted_records, &empty_tablet_queues, hostport, deadline));
-    auto tablet_id = tablet_record_info_pair.first;
-    auto unique_id = tablet_record_info_pair.second.first;
+
+    auto tablet_record_info_pair = VERIFY_RESULT(GetNextRecordToBeShipped(
+        stream_id, &sorted_records, &empty_tablet_queues, hostport, deadline));
+    const auto tablet_id = tablet_record_info_pair.first;
+    const auto unique_id = tablet_record_info_pair.second.first;
     auto record = tablet_record_info_pair.second.second;
+
+    // We never ship safepoint record to the walsender.
     if (record->row_message().op() == RowMessage_Op_SAFEPOINT) {
       continue;
     }
+
+    // We want to ship all the txns having same commit_time as a single txn. Therefore, when we
+    // encounter the first commit_record for a txn in progress, dont ship it right away since
+    // there can be more txns at the same commit_time that are not yet popped from PQ. We'll ship
+    // the commit record for this pg_txn_id once we are sure that we have fully shipped all DMLs
+    // with the same commit_time.
+    if (is_txn_in_progress && !curr_active_txn_commit_record) {
+      curr_active_txn_commit_record =
+          std::make_shared<TabletRecordInfoPair>(tablet_record_info_pair);
+      continue;
+    }
+
     auto row_message = record->mutable_row_message();
     auto lsn_result = GetRecordLSN(unique_id);
     auto txn_id_result = GetRecordTxnID(unique_id);
@@ -278,12 +293,16 @@ Status CDCSDKVirtualWAL::GetConsistentChangesInternal(
 
       if (record->row_message().op() == RowMessage_Op_BEGIN) {
         RETURN_NOT_OK(AddEntryForBeginRecord({unique_id, record}));
+        is_txn_in_progress = true;
         metadata.begin_records++;
         metadata.is_last_txn_fully_sent = false;
       } else if (record->row_message().op() == RowMessage_Op_COMMIT) {
         last_shipped_commit.commit_lsn = *lsn_result;
         last_shipped_commit.commit_txn_id = *txn_id_result;
         last_shipped_commit.commit_record_unique_id = unique_id;
+
+        is_txn_in_progress = false;
+        curr_active_txn_commit_record = nullptr;
 
         metadata.commit_records++;
         if (row_message->pg_transaction_id() == metadata.max_txn_id &&
@@ -491,6 +510,38 @@ Status CDCSDKVirtualWAL::AddRecordToVirtualWalPriorityQueue(
   return Status::OK();
 }
 
+Result<TabletRecordInfoPair> CDCSDKVirtualWAL::GetNextRecordToBeShipped(
+    const xrepl::StreamId& stream_id, TabletRecordPriorityQueue* sorted_records,
+    std::vector<TabletId>* empty_tablet_queues, const HostPort hostport,
+    const CoarseTimePoint deadline) {
+  TabletRecordInfoPair tablet_record_info_pair;
+  if (is_txn_in_progress && curr_active_txn_commit_record) {
+    // If we have already encounterd a commit record for the current txn_in_progress,
+    // curr_active_txn_commit_record will point to a valid commit record. At this point, peek the
+    // next entry of PQ and check if the curr_active_txn_commit_record's unique ID is less than the
+    // peeked entry's unique record ID by calling CanGenerateLSN().
+    //
+    // If curr_active_txn_commit_record's unique ID < peeked entry's unique record ID,
+    // this implies that we have shipped all the DMLs with the same commit_time, therefore, we can
+    // now ship the commit record for the current pg_txn_id. So, skip popping a record from the PQ
+    // in this case and pass the commit record to the LSN generator.
+    auto next_pq_entry = sorted_records->top();
+    auto next_record_unique_id = next_pq_entry.second.first;
+    if (CDCSDKUniqueRecordID::CanGenerateLSN(
+            curr_active_txn_commit_record->second.first, next_record_unique_id)) {
+      tablet_record_info_pair = next_pq_entry;
+    } else {
+      tablet_record_info_pair = VERIFY_RESULT(
+          FindConsistentRecord(stream_id, sorted_records, empty_tablet_queues, hostport, deadline));
+    }
+  } else {
+    tablet_record_info_pair = VERIFY_RESULT(
+        FindConsistentRecord(stream_id, sorted_records, empty_tablet_queues, hostport, deadline));
+  }
+
+  return tablet_record_info_pair;
+}
+
 Result<TabletRecordInfoPair> CDCSDKVirtualWAL::FindConsistentRecord(
     const xrepl::StreamId& stream_id, TabletRecordPriorityQueue* sorted_records,
     std::vector<TabletId>* empty_tablet_queues, const HostPort hostport,
@@ -515,7 +566,7 @@ Result<uint64_t> CDCSDKVirtualWAL::GetRecordLSN(
   // changes were done as part of separate transactions. This check helps to filter
   // duplicate records like BEGIN/COMMIT that can be received in case of multi-shard transaction or
   // multiple transactions with same commit_time.
-  if (last_seen_unique_record_id_->lessThan(record_id)) {
+  if (CDCSDKUniqueRecordID::CanGenerateLSN(last_seen_unique_record_id_, record_id)) {
     last_seen_lsn_ += 1;
     return last_seen_lsn_;
   }

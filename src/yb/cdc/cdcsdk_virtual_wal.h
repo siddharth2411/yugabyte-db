@@ -122,6 +122,11 @@ class CDCSDKVirtualWAL {
   Status AddRecordToVirtualWalPriorityQueue(
       const TabletId& tablet_id, TabletRecordPriorityQueue* sorted_records);
 
+  Result<TabletRecordInfoPair> GetNextRecordToBeShipped(
+      const xrepl::StreamId& stream_id, TabletRecordPriorityQueue* sorted_records,
+      std::vector<TabletId>* empty_tablet_queues, const HostPort hostport,
+      const CoarseTimePoint deadline);
+
   Result<TabletRecordInfoPair> FindConsistentRecord(
       const xrepl::StreamId& stream_id, TabletRecordPriorityQueue* sorted_records,
       std::vector<TabletId>* empty_tablet_queues, const HostPort hostport,
@@ -160,6 +165,9 @@ class CDCSDKVirtualWAL {
   // This will hold the restart_lsn value received in the UpdateAndPersistLSN RPC call. It will
   // initialised by the restart_lsn stores in the cdc_state's entry for slot.
   uint64_t last_received_restart_lsn;
+
+  bool is_txn_in_progress = false;
+  std::shared_ptr<TabletRecordInfoPair> curr_active_txn_commit_record = nullptr;
 
   // This map stores all information for the next GetChanges call on a per tablet basis except for
   // the explicit checkpoint. The key is the tablet id. The value is a struct used to populate the
