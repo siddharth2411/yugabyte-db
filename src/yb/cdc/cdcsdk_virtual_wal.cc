@@ -253,10 +253,24 @@ Status CDCSDKVirtualWAL::GetConsistentChangesInternal(
     // there can be more txns at the same commit_time that are not yet popped from PQ. We'll ship
     // the commit record for this pg_txn_id once we are sure that we have fully shipped all DMLs
     // with the same commit_time.
-    if (is_txn_in_progress && !curr_active_txn_commit_record) {
-      curr_active_txn_commit_record =
-          std::make_shared<TabletRecordInfoPair>(tablet_record_info_pair);
-      continue;
+    if (record->row_message().op() == RowMessage_Op_COMMIT && !should_ship_commit) {
+      if (is_txn_in_progress && !curr_active_txn_commit_record) {
+        VLOG(2) << "Encountered 1st commit record for txn_id: " << last_seen_txn_id_
+                << ". Will store it for shipping later";
+        curr_active_txn_commit_record =
+            std::make_shared<TabletRecordInfoPair>(tablet_record_info_pair);
+        continue;
+      }
+
+      // Discard any intermediate commit records having the same commit_time as the 1st commit
+      // record we encountered.
+      if (is_txn_in_progress && curr_active_txn_commit_record &&
+          curr_active_txn_commit_record->second.second->row_message().commit_time() ==
+              record->row_message().commit_time()) {
+        VLOG(2) << "Encountered intermediate commit record with same commit_time for txn_id: "
+                << last_seen_txn_id_ << ". Will skip it";
+        continue;
+      }
     }
 
     auto row_message = record->mutable_row_message();
@@ -302,6 +316,7 @@ Status CDCSDKVirtualWAL::GetConsistentChangesInternal(
         last_shipped_commit.commit_record_unique_id = unique_id;
 
         is_txn_in_progress = false;
+        should_ship_commit = false;
         curr_active_txn_commit_record = nullptr;
 
         metadata.commit_records++;
@@ -529,8 +544,13 @@ Result<TabletRecordInfoPair> CDCSDKVirtualWAL::GetNextRecordToBeShipped(
     auto next_record_unique_id = next_pq_entry.second.first;
     if (CDCSDKUniqueRecordID::CanGenerateLSN(
             curr_active_txn_commit_record->second.first, next_record_unique_id)) {
-      tablet_record_info_pair = next_pq_entry;
+      VLOG(2) << "Can generate LSN for commit record. Will ship the commit record for txn_id: "
+              << last_seen_txn_id_;
+      should_ship_commit = true;
+      tablet_record_info_pair = *curr_active_txn_commit_record;
     } else {
+      VLOG(2) << "Cannot generate LSN for commit record of txn_id: " << last_seen_txn_id_
+              << ". Will pop from PQ";
       tablet_record_info_pair = VERIFY_RESULT(
           FindConsistentRecord(stream_id, sorted_records, empty_tablet_queues, hostport, deadline));
     }

@@ -167,6 +167,7 @@ class CDCSDKVirtualWAL {
   uint64_t last_received_restart_lsn;
 
   bool is_txn_in_progress = false;
+  bool should_ship_commit = false;
   std::shared_ptr<TabletRecordInfoPair> curr_active_txn_commit_record = nullptr;
 
   // This map stores all information for the next GetChanges call on a per tablet basis except for
