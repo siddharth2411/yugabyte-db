@@ -35,7 +35,11 @@ CDCSDKUniqueRecordID::CDCSDKUniqueRecordID(const std::shared_ptr<CDCSDKProtoReco
   switch (this->op_) {
     case RowMessage_Op_DDL: FALLTHROUGH_INTENDED;
     case RowMessage_Op_BEGIN:
-      this->docdb_txn_id_ = "";
+      if (record->row_message().has_transaction_id()) {
+        this->docdb_txn_id_ = record->row_message().transaction_id();
+      } else {
+        this->docdb_txn_id_ = "";
+      }
       this->record_time_ = 0;
       this->write_id_ = 0;
       this->table_id_ = "";
@@ -43,7 +47,11 @@ CDCSDKUniqueRecordID::CDCSDKUniqueRecordID(const std::shared_ptr<CDCSDKProtoReco
       break;
     case RowMessage_Op_SAFEPOINT: FALLTHROUGH_INTENDED;
     case RowMessage_Op_COMMIT:
-      this->docdb_txn_id_ = "";
+      if (record->row_message().has_transaction_id()) {
+        this->docdb_txn_id_ = record->row_message().transaction_id();
+      } else {
+        this->docdb_txn_id_ = "";
+      }
       this->record_time_ = std::numeric_limits<uint64_t>::max();
       this->write_id_ = std::numeric_limits<uint32_t>::max();
       this->table_id_ = "";
