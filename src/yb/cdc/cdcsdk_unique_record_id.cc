@@ -94,14 +94,17 @@ VWALRecordType CDCSDKUniqueRecordID::GetVWALRecordTypeFromOp(const RowMessage_Op
     case RowMessage_Op_SAFEPOINT:
       return VWALRecordType::SAFEPOINT;
       break;
-    case RowMessage_Op_TRUNCATE:
-    case RowMessage_Op_READ:
+    case RowMessage_Op_TRUNCATE: FALLTHROUGH_INTENDED;
+    case RowMessage_Op_READ: FALLTHROUGH_INTENDED;
     case RowMessage_Op_UNKNOWN:
-      // This should never happen as we only invoke this constructor after ensuring that the value
-      // is not one of these.
-      LOG(FATAL) << "Unexpected RowMessage OP received: " << op;
+      // This should never happen as we only invoke the constructor that calls this method after
+      // ensuring that the value is not one of these.
+      LOG(FATAL) << "Unexpected RowMessage Op received to get VWAL record type: " << op;
       break;
   }
+
+  // flow should never reach this point.
+  return VWALRecordType::UNKNOWN;
 }
 
 bool CDCSDKUniqueRecordID::CanFormUniqueRecordId(
@@ -267,6 +270,10 @@ std::string CDCSDKUniqueRecordID::ToString() const {
       break;
     case VWALRecordType::SAFEPOINT:
       result = Format("RecordType: SAFEPOINT");
+      break;
+    case UNKNOWN:
+      // should never be encountered.
+      result = Format("RecordType: UNKNOWN");
       break;
   }
 

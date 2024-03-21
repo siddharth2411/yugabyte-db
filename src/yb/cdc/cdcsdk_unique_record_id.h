@@ -32,7 +32,8 @@ class CDCSDKUniqueRecordID {
     DML = 1,
     COMMIT = 2,
     DDL = 3,
-    SAFEPOINT = 4
+    SAFEPOINT = 4,
+    UNKNOWN = 5 // should never be encountered
   };
 
   CDCSDKUniqueRecordID::VWALRecordType GetVWALRecordTypeFromOp(const RowMessage_Op op);
