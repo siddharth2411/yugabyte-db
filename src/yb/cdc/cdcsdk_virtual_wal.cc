@@ -542,7 +542,7 @@ Result<TabletRecordInfoPair> CDCSDKVirtualWAL::GetNextRecordToBeShipped(
     // in this case and pass the commit record to the LSN generator.
     auto next_pq_entry = sorted_records->top();
     auto next_record_unique_id = next_pq_entry.second.first;
-    if (CDCSDKUniqueRecordID::CanGenerateLSN(
+    if (CDCSDKUniqueRecordID::GreaterThanDistributedLSN(
             curr_active_txn_commit_record->second.first, next_record_unique_id)) {
       VLOG(2) << "Can generate LSN for commit record. Will ship the commit record for txn_id: "
               << last_seen_txn_id_;
@@ -586,7 +586,7 @@ Result<uint64_t> CDCSDKVirtualWAL::GetRecordLSN(
   // changes were done as part of separate transactions. This check helps to filter
   // duplicate records like BEGIN/COMMIT that can be received in case of multi-shard transaction or
   // multiple transactions with same commit_time.
-  if (CDCSDKUniqueRecordID::CanGenerateLSN(last_seen_unique_record_id_, record_id)) {
+  if (CDCSDKUniqueRecordID::GreaterThanDistributedLSN(last_seen_unique_record_id_, record_id)) {
     last_seen_lsn_ += 1;
     return last_seen_lsn_;
   }
@@ -714,7 +714,7 @@ bool CDCSDKVirtualWAL::CompareCDCSDKProtoRecords::operator()(
   auto old_record_id = old_record.second.first;
   auto new_record_id = new_record.second.first;
 
-  return old_record_id->lessThan(new_record_id);
+  return old_record_id->LessThan(new_record_id);
 }
 
 }  // namespace cdc

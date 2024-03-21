@@ -26,13 +26,24 @@ class CDCSDKUniqueRecordID {
       RowMessage_Op op, uint64_t commit_time, std::string& docdb_txn_id, uint64_t record_time,
       uint32_t write_id, std::string& table_id, std::string& primary_key);
 
+  enum VWALRecordType {
+    // These are arranged in the priority order with BEGIN having the highest priority.
+    BEGIN = 0,
+    DML = 1,
+    COMMIT = 2,
+    DDL = 3,
+    SAFEPOINT = 4
+  };
+
+  CDCSDKUniqueRecordID::VWALRecordType GetVWALRecordTypeFromOp(const RowMessage_Op op);
+
   static bool CanFormUniqueRecordId(const std::shared_ptr<CDCSDKProtoRecordPB>& record);
 
   // This method will be used by the Virtual WAL's Priority queue to sort records in the PQ.
-  bool lessThan(const std::shared_ptr<CDCSDKUniqueRecordID>& curr_unique_record_id);
+  bool LessThan(const std::shared_ptr<CDCSDKUniqueRecordID>& other_unique_record_id);
 
   // This method will be used by the LSN generator.
-  static bool CanGenerateLSN(
+  static bool GreaterThanDistributedLSN(
       const std::shared_ptr<CDCSDKUniqueRecordID>& last_seen_unique_record_id,
       const std::shared_ptr<CDCSDKUniqueRecordID>& curr_unique_record_id);
 
@@ -42,6 +53,7 @@ class CDCSDKUniqueRecordID {
 
  private:
   RowMessage_Op op_;
+  VWALRecordType vwal_record_type_;
   uint64_t commit_time_;
   std::string docdb_txn_id_;
   uint64_t record_time_;

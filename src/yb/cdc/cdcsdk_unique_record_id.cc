@@ -18,10 +18,13 @@ namespace yb {
 
 namespace cdc {
 
+using VWALRecordType = CDCSDKUniqueRecordID::VWALRecordType;
+
 CDCSDKUniqueRecordID::CDCSDKUniqueRecordID(
     RowMessage_Op op, uint64_t commit_time, std::string& docdb_txn_id, uint64_t record_time,
     uint32_t write_id, std::string& table_id, std::string& primary_key)
     : op_(op),
+      vwal_record_type_(GetVWALRecordTypeFromOp(op)),
       commit_time_(commit_time),
       docdb_txn_id_(docdb_txn_id),
       record_time_(record_time),
@@ -31,6 +34,7 @@ CDCSDKUniqueRecordID::CDCSDKUniqueRecordID(
 
 CDCSDKUniqueRecordID::CDCSDKUniqueRecordID(const std::shared_ptr<CDCSDKProtoRecordPB>& record) {
   this->op_ = record->row_message().op();
+  this->vwal_record_type_ = GetVWALRecordTypeFromOp(this->op_);
   this->commit_time_ = record->row_message().commit_time();
   if (record->row_message().has_transaction_id()) {
     this->docdb_txn_id_ = record->row_message().transaction_id();
@@ -71,11 +75,42 @@ CDCSDKUniqueRecordID::CDCSDKUniqueRecordID(const std::shared_ptr<CDCSDKProtoReco
 
 uint64_t CDCSDKUniqueRecordID::GetCommitTime() const { return commit_time_; }
 
+VWALRecordType CDCSDKUniqueRecordID::GetVWALRecordTypeFromOp(const RowMessage_Op op) {
+  switch (op) {
+    case RowMessage_Op_BEGIN:
+      return VWALRecordType::BEGIN;
+      break;
+    case RowMessage_Op_INSERT: FALLTHROUGH_INTENDED;
+    case RowMessage_Op_DELETE: FALLTHROUGH_INTENDED;
+    case RowMessage_Op_UPDATE:
+      return VWALRecordType::DML;
+      break;
+    case RowMessage_Op_COMMIT:
+      return VWALRecordType::COMMIT;
+      break;
+    case RowMessage_Op_DDL:
+      return VWALRecordType::DDL;
+      break;
+    case RowMessage_Op_SAFEPOINT:
+      return VWALRecordType::SAFEPOINT;
+      break;
+    case RowMessage_Op_TRUNCATE:
+    case RowMessage_Op_READ:
+    case RowMessage_Op_UNKNOWN:
+      // This should never happen as we only invoke this constructor after ensuring that the value
+      // is not one of these.
+      LOG(FATAL) << "Unexpected RowMessage OP received: " << op;
+      break;
+  }
+}
+
 bool CDCSDKUniqueRecordID::CanFormUniqueRecordId(
     const std::shared_ptr<CDCSDKProtoRecordPB>& record) {
   RowMessage_Op op = record->row_message().op();
   switch (op) {
-    case RowMessage_Op_DDL: FALLTHROUGH_INTENDED;
+    case RowMessage_Op_DDL:
+      return record->row_message().has_commit_time() && record->row_message().has_table_id();
+      break;
     case RowMessage_Op_BEGIN: FALLTHROUGH_INTENDED;
     case RowMessage_Op_COMMIT: FALLTHROUGH_INTENDED;
     case RowMessage_Op_SAFEPOINT:
@@ -99,69 +134,69 @@ bool CDCSDKUniqueRecordID::CanFormUniqueRecordId(
   return false;
 }
 
-bool IsSafepointOp(const RowMessage_Op op) {
-  return op == RowMessage_Op_SAFEPOINT;
+bool IsSafepointRecordType(const VWALRecordType vwal_record_type) {
+  return vwal_record_type == VWALRecordType::SAFEPOINT;
 }
 
-bool IsCommitOp(const RowMessage_Op op) {
-  return op == RowMessage_Op_COMMIT;
+bool IsBeginOrCommitRecordType(const VWALRecordType vwal_record_type) {
+  return vwal_record_type == VWALRecordType::BEGIN || vwal_record_type == VWALRecordType::COMMIT;
 }
 
-bool IsBeginOrCommitOp(const RowMessage_Op op) {
-  return op == RowMessage_Op_BEGIN || op == RowMessage_Op_COMMIT;
-}
-
-bool CDCSDKUniqueRecordID::lessThan(
-    const std::shared_ptr<CDCSDKUniqueRecordID>& curr_unique_record_id) {
-  if (this->commit_time_ != curr_unique_record_id->commit_time_) {
-    return this->commit_time_ < curr_unique_record_id->commit_time_;
+bool CDCSDKUniqueRecordID::LessThan(
+    const std::shared_ptr<CDCSDKUniqueRecordID>& other_unique_record_id) {
+  if (this->commit_time_ != other_unique_record_id->commit_time_) {
+    return this->commit_time_ < other_unique_record_id->commit_time_;
   }
 
   // Safepoint record should always get the lowest priority in PQ.
-  if (IsSafepointOp(this->op_) || IsSafepointOp(curr_unique_record_id->op_)) {
-    return !(IsSafepointOp(this->op_));
+  if (IsSafepointRecordType(this->vwal_record_type_) ||
+      IsSafepointRecordType(other_unique_record_id->vwal_record_type_)) {
+    return !(IsSafepointRecordType(this->vwal_record_type_));
   }
 
-  if (this->docdb_txn_id_ != curr_unique_record_id->docdb_txn_id_) {
-    return this->docdb_txn_id_ < curr_unique_record_id->docdb_txn_id_;
+  if (this->docdb_txn_id_ != other_unique_record_id->docdb_txn_id_) {
+    return this->docdb_txn_id_ < other_unique_record_id->docdb_txn_id_;
   }
 
-  if (this->record_time_ != curr_unique_record_id->record_time_) {
-    return this->record_time_ < curr_unique_record_id->record_time_;
+  if (this->record_time_ != other_unique_record_id->record_time_) {
+    return this->record_time_ < other_unique_record_id->record_time_;
   }
 
-  if (this->write_id_ != curr_unique_record_id->write_id_) {
-    return this->write_id_ < curr_unique_record_id->write_id_;
+  if (this->write_id_ != other_unique_record_id->write_id_) {
+    return this->write_id_ < other_unique_record_id->write_id_;
   }
 
-  if (this->table_id_ != curr_unique_record_id->table_id_) {
-    return this->table_id_ < curr_unique_record_id->table_id_;
+  if (this->table_id_ != other_unique_record_id->table_id_) {
+    return this->table_id_ < other_unique_record_id->table_id_;
   }
 
-  return this->primary_key_ < curr_unique_record_id->primary_key_;
+  return this->primary_key_ < other_unique_record_id->primary_key_;
 }
 
 // Return true iff, curr_unique_record_id > last_seen_unique_record_id
-bool CDCSDKUniqueRecordID::CanGenerateLSN(
+bool CDCSDKUniqueRecordID::GreaterThanDistributedLSN(
     const std::shared_ptr<CDCSDKUniqueRecordID>& last_seen_unique_record_id,
     const std::shared_ptr<CDCSDKUniqueRecordID>& curr_unique_record_id) {
   if (last_seen_unique_record_id->commit_time_ != curr_unique_record_id->commit_time_) {
     return last_seen_unique_record_id->commit_time_ < curr_unique_record_id->commit_time_;
   }
 
-  // Although Safepoint record is never sent to LSN generator, we require this check here because we
-  // hold a commit record for a txn until we are sure that all DMLs having the same commit_time are
-  // shipped. During this process of holding the commit record, we peek the PQ and compare the
-  // stored commit record's unique id with the peeked entry that can be a SAFEPOINT record. Hence,
-  // we need this check so that in the described case, we are able to ship the commit record.
-  if (IsSafepointOp(last_seen_unique_record_id->op_) || IsSafepointOp(curr_unique_record_id->op_)) {
-    return !(IsSafepointOp(last_seen_unique_record_id->op_));
+  // We have defined our priority order for record types if we tie on the commit_time. The below
+  // check will also compare a SAFEPOINT record with another record even though the SAFEPOINT record
+  // is never sent to LSN generator. We require this check here because we hold the commit record
+  // for a txn until we are sure that all DMLs having the same commit_time are shipped. During this
+  // process of holding the commit record, we peek the PQ and compare the held commit record's
+  // unique id with the peeked entry that can be a SAFEPOINT record. Hence, we need this check so
+  // that in the described case, we are able to ship the commit record.
+  if (last_seen_unique_record_id->vwal_record_type_ != curr_unique_record_id->vwal_record_type_) {
+    return last_seen_unique_record_id->vwal_record_type_ < curr_unique_record_id->vwal_record_type_;
   }
 
-  // Skip comparing docdb_txn_id if the current record is a BEGIN/COMMIT record since we want to
-  // ship all txns with same commit_time in a single txn from VWAL.
-  if (!IsBeginOrCommitOp(last_seen_unique_record_id->op_) &&
-      !IsBeginOrCommitOp(curr_unique_record_id->op_)) {
+  // Skip comparing docdb_txn_id if either record is a BEGIN/COMMIT record since we want to
+  // ship all txns with same commit_time in a single txn from VWAL. Therefore, from VWAL's
+  // perspective, only 1 pair of BEGIN/COMMITs will be shipped for the pg_txn.
+  if (!IsBeginOrCommitRecordType(last_seen_unique_record_id->vwal_record_type_) &&
+      !IsBeginOrCommitRecordType(curr_unique_record_id->vwal_record_type_)) {
     if (last_seen_unique_record_id->docdb_txn_id_ != curr_unique_record_id->docdb_txn_id_) {
       return last_seen_unique_record_id->docdb_txn_id_ < curr_unique_record_id->docdb_txn_id_;
     }
@@ -214,6 +249,24 @@ std::string CDCSDKUniqueRecordID::ToString() const {
       break;
     case RowMessage_Op_UNKNOWN:
       result = Format("op: UNKNOWN");
+      break;
+  }
+
+  switch (vwal_record_type_) {
+    case VWALRecordType::DDL:
+      result = Format("RecordType: DDL");
+      break;
+    case VWALRecordType::BEGIN:
+      result = Format("RecordType: BEGIN");
+      break;
+    case VWALRecordType::COMMIT:
+      result = Format("RecordType: COMMIT");
+      break;
+    case VWALRecordType::DML:
+      result = Format("RecordType: DML");
+      break;
+    case VWALRecordType::SAFEPOINT:
+      result = Format("RecordType: SAFEPOINT");
       break;
   }
 
