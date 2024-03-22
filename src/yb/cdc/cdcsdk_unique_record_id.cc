@@ -177,7 +177,7 @@ bool CDCSDKUniqueRecordID::LessThan(
   return this->primary_key_ < other_unique_record_id->primary_key_;
 }
 
-// Return true iff, other_unique_record_id > this.unique_record_id
+// Return true iff, this.unique_record_id > other_unique_record_id
 bool CDCSDKUniqueRecordID::GreaterThanDistributedLSN(
     const std::shared_ptr<CDCSDKUniqueRecordID>& other_unique_record_id) {
   if (this->commit_time_ != other_unique_record_id->commit_time_) {
