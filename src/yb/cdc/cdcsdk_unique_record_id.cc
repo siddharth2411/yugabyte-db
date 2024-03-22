@@ -145,6 +145,7 @@ bool IsBeginOrCommitRecordType(const VWALRecordType vwal_record_type) {
   return vwal_record_type == VWALRecordType::BEGIN || vwal_record_type == VWALRecordType::COMMIT;
 }
 
+// Return true iff, other_unique_record_id > this.unique_record_id
 bool CDCSDKUniqueRecordID::LessThan(
     const std::shared_ptr<CDCSDKUniqueRecordID>& other_unique_record_id) {
   if (this->commit_time_ != other_unique_record_id->commit_time_) {
@@ -176,12 +177,11 @@ bool CDCSDKUniqueRecordID::LessThan(
   return this->primary_key_ < other_unique_record_id->primary_key_;
 }
 
-// Return true iff, curr_unique_record_id > last_seen_unique_record_id
+// Return true iff, other_unique_record_id > this.unique_record_id
 bool CDCSDKUniqueRecordID::GreaterThanDistributedLSN(
-    const std::shared_ptr<CDCSDKUniqueRecordID>& last_seen_unique_record_id,
-    const std::shared_ptr<CDCSDKUniqueRecordID>& curr_unique_record_id) {
-  if (last_seen_unique_record_id->commit_time_ != curr_unique_record_id->commit_time_) {
-    return last_seen_unique_record_id->commit_time_ < curr_unique_record_id->commit_time_;
+    const std::shared_ptr<CDCSDKUniqueRecordID>& other_unique_record_id) {
+  if (this->commit_time_ != other_unique_record_id->commit_time_) {
+    return this->commit_time_ > other_unique_record_id->commit_time_;
   }
 
   // We have defined our priority order for record types if we tie on the commit_time. The below
@@ -191,33 +191,33 @@ bool CDCSDKUniqueRecordID::GreaterThanDistributedLSN(
   // process of holding the commit record, we peek the PQ and compare the held commit record's
   // unique id with the peeked entry that can be a SAFEPOINT record. Hence, we need this check so
   // that in the described case, we are able to ship the commit record.
-  if (last_seen_unique_record_id->vwal_record_type_ != curr_unique_record_id->vwal_record_type_) {
-    return last_seen_unique_record_id->vwal_record_type_ < curr_unique_record_id->vwal_record_type_;
+  if (this->vwal_record_type_ != other_unique_record_id->vwal_record_type_) {
+    return this->vwal_record_type_ > other_unique_record_id->vwal_record_type_;
   }
 
   // Skip comparing docdb_txn_id if either record is a BEGIN/COMMIT record since we want to
   // ship all txns with same commit_time in a single txn from VWAL. Therefore, from VWAL's
   // perspective, only 1 pair of BEGIN/COMMITs will be shipped for the pg_txn.
-  if (!IsBeginOrCommitRecordType(last_seen_unique_record_id->vwal_record_type_) &&
-      !IsBeginOrCommitRecordType(curr_unique_record_id->vwal_record_type_)) {
-    if (last_seen_unique_record_id->docdb_txn_id_ != curr_unique_record_id->docdb_txn_id_) {
-      return last_seen_unique_record_id->docdb_txn_id_ < curr_unique_record_id->docdb_txn_id_;
+  if (!IsBeginOrCommitRecordType(this->vwal_record_type_) &&
+      !IsBeginOrCommitRecordType(other_unique_record_id->vwal_record_type_)) {
+    if (this->docdb_txn_id_ != other_unique_record_id->docdb_txn_id_) {
+      return this->docdb_txn_id_ > other_unique_record_id->docdb_txn_id_;
     }
   }
 
-  if (last_seen_unique_record_id->record_time_ != curr_unique_record_id->record_time_) {
-    return last_seen_unique_record_id->record_time_ < curr_unique_record_id->record_time_;
+  if (this->record_time_ != other_unique_record_id->record_time_) {
+    return this->record_time_ > other_unique_record_id->record_time_;
   }
 
-  if (last_seen_unique_record_id->write_id_ != curr_unique_record_id->write_id_) {
-    return last_seen_unique_record_id->write_id_ < curr_unique_record_id->write_id_;
+  if (this->write_id_ != other_unique_record_id->write_id_) {
+    return this->write_id_ > other_unique_record_id->write_id_;
   }
 
-  if (last_seen_unique_record_id->table_id_ != curr_unique_record_id->table_id_) {
-    return last_seen_unique_record_id->table_id_ < curr_unique_record_id->table_id_;
+  if (this->table_id_ != other_unique_record_id->table_id_) {
+    return this->table_id_ > other_unique_record_id->table_id_;
   }
 
-  return last_seen_unique_record_id->primary_key_ < curr_unique_record_id->primary_key_;
+  return this->primary_key_ > other_unique_record_id->primary_key_;
 }
 
 std::string CDCSDKUniqueRecordID::ToString() const {

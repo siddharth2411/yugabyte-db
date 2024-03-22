@@ -315,9 +315,7 @@ Status CDCSDKVirtualWAL::GetConsistentChangesInternal(
         last_shipped_commit.commit_txn_id = *txn_id_result;
         last_shipped_commit.commit_record_unique_id = unique_id;
 
-        is_txn_in_progress = false;
-        should_ship_commit = false;
-        curr_active_txn_commit_record = nullptr;
+        ResetCommitDecisionVariables();
 
         metadata.commit_records++;
         if (row_message->pg_transaction_id() == metadata.max_txn_id &&
@@ -536,14 +534,14 @@ Result<TabletRecordInfoPair> CDCSDKVirtualWAL::GetNextRecordToBeShipped(
     // next entry of PQ and check if the curr_active_txn_commit_record's unique ID is less than the
     // peeked entry's unique record ID by calling CanGenerateLSN().
     //
-    // If curr_active_txn_commit_record's unique ID < peeked entry's unique record ID,
+    // If peeked entry's unique record ID > curr_active_txn_commit_record's unique ID,
     // this implies that we have shipped all the DMLs with the same commit_time, therefore, we can
     // now ship the commit record for the current pg_txn_id. So, skip popping a record from the PQ
     // in this case and pass the commit record to the LSN generator.
     auto next_pq_entry = sorted_records->top();
     auto next_record_unique_id = next_pq_entry.second.first;
-    if (CDCSDKUniqueRecordID::GreaterThanDistributedLSN(
-            curr_active_txn_commit_record->second.first, next_record_unique_id)) {
+    auto commit_record_unique_id = curr_active_txn_commit_record->second.first;
+    if (next_record_unique_id->GreaterThanDistributedLSN(commit_record_unique_id)) {
       VLOG(2) << "Can generate LSN for commit record. Will ship the commit record for txn_id: "
               << last_seen_txn_id_;
       should_ship_commit = true;
@@ -581,12 +579,12 @@ Result<TabletRecordInfoPair> CDCSDKVirtualWAL::FindConsistentRecord(
 }
 
 Result<uint64_t> CDCSDKVirtualWAL::GetRecordLSN(
-    const std::shared_ptr<CDCSDKUniqueRecordID>& record_id) {
+    const std::shared_ptr<CDCSDKUniqueRecordID>& curr_unique_record_id) {
   // We want to stream all records with the same commit_time as a single transaction even if the
   // changes were done as part of separate transactions. This check helps to filter
   // duplicate records like BEGIN/COMMIT that can be received in case of multi-shard transaction or
   // multiple transactions with same commit_time.
-  if (CDCSDKUniqueRecordID::GreaterThanDistributedLSN(last_seen_unique_record_id_, record_id)) {
+  if (curr_unique_record_id->GreaterThanDistributedLSN(last_seen_unique_record_id_)) {
     last_seen_lsn_ += 1;
     return last_seen_lsn_;
   }
@@ -595,9 +593,9 @@ Result<uint64_t> CDCSDKVirtualWAL::GetRecordLSN(
 }
 
 Result<uint32_t> CDCSDKVirtualWAL::GetRecordTxnID(
-    const std::shared_ptr<CDCSDKUniqueRecordID>& record_id) {
+    const std::shared_ptr<CDCSDKUniqueRecordID>& curr_unique_record_id) {
   auto last_seen_commit_time = last_seen_unique_record_id_->GetCommitTime();
-  auto curr_record_commit_time = record_id->GetCommitTime();
+  auto curr_record_commit_time = curr_unique_record_id->GetCommitTime();
 
   if (last_seen_commit_time < curr_record_commit_time) {
     last_seen_txn_id_ += 1;
@@ -707,6 +705,12 @@ Status CDCSDKVirtualWAL::UpdateSlotEntryInCDCState(
   RETURN_NOT_OK(cdc_service_->cdc_state_table_->UpdateEntries({entry}));
 
   return Status::OK();
+}
+
+void CDCSDKVirtualWAL::ResetCommitDecisionVariables() {
+  is_txn_in_progress = false;
+  should_ship_commit = false;
+  curr_active_txn_commit_record = nullptr;
 }
 
 bool CDCSDKVirtualWAL::CompareCDCSDKProtoRecords::operator()(
