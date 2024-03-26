@@ -146,7 +146,7 @@ bool IsBeginOrCommitRecordType(const VWALRecordType vwal_record_type) {
 }
 
 // Return true iff, other_unique_record_id > this.unique_record_id
-bool CDCSDKUniqueRecordID::LessThan(
+bool CDCSDKUniqueRecordID::HasHigherPriorityThan(
     const std::shared_ptr<CDCSDKUniqueRecordID>& other_unique_record_id) {
   if (this->commit_time_ != other_unique_record_id->commit_time_) {
     return this->commit_time_ < other_unique_record_id->commit_time_;

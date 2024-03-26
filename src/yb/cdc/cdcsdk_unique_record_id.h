@@ -41,9 +41,11 @@ class CDCSDKUniqueRecordID {
   static bool CanFormUniqueRecordId(const std::shared_ptr<CDCSDKProtoRecordPB>& record);
 
   // This comparator will be used by the Virtual WAL's Priority queue to sort records in the PQ.
-  bool LessThan(const std::shared_ptr<CDCSDKUniqueRecordID>& other_unique_record_id);
+  // Returns true iff this "HasHigherPriorityThan" other <=> this < other.
+  bool HasHigherPriorityThan(const std::shared_ptr<CDCSDKUniqueRecordID>& other_unique_record_id);
 
-  // This comparator will be used by the LSN generator.
+  // This comparator will be used by the LSN generator. Returns true iff this
+  // "GreaterThanDistributedLSN" other <=> this > other.
   bool GreaterThanDistributedLSN(
       const std::shared_ptr<CDCSDKUniqueRecordID>& other_unique_record_id);
 

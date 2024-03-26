@@ -718,7 +718,7 @@ bool CDCSDKVirtualWAL::CompareCDCSDKProtoRecords::operator()(
   auto old_record_id = old_record.second.first;
   auto new_record_id = new_record.second.first;
 
-  return old_record_id->LessThan(new_record_id);
+  return old_record_id->HasHigherPriorityThan(new_record_id);
 }
 
 }  // namespace cdc
