@@ -1726,6 +1726,16 @@ Status CatalogManager::FindCDCSDKStreamsForAddedTables(
           continue;
         }
 
+        if (IsMatviewTable(*table)) {
+          RemoveTableFromCDCSDKUnprocessedMap(unprocessed_table_id, stream_info->namespace_id());
+          continue;
+        }
+
+        if (!IsUserTableUnlocked(*table)) {
+          RemoveTableFromCDCSDKUnprocessedMap(unprocessed_table_id, stream_info->namespace_id());
+          continue;
+        }
+
         if (std::find(ltm->table_id().begin(), ltm->table_id().end(), unprocessed_table_id) ==
             ltm->table_id().end()) {
           (*table_to_unprocessed_streams_map)[unprocessed_table_id].push_back(stream_info);
@@ -1874,6 +1884,8 @@ std::vector<TableInfoPtr> CatalogManager::FindAllTablesForCDCSDK(const Namespace
 
     tables.push_back(table_info);
   }
+
+  LOG(INFO) <<"Sid: Table list: " << AsString(tables);
 
   return tables;
 }

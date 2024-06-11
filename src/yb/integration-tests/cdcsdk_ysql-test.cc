@@ -8519,5 +8519,57 @@ TEST_F(CDCSDKYsqlTest, TestGetChangesResponseSize) {
   ASSERT_TRUE(seen_resp_greater_than_limit);
 }
 
+TEST_F(CDCSDKYsqlTest, TestIndexesShouldNotGetAddedToCDCStream) {
+  ANNOTATE_UNPROTECTED_WRITE(FLAGS_cdc_state_checkpoint_update_interval_ms) = 0;
+
+  ASSERT_OK(SetUpWithParams(3, 1, false));
+  const uint32_t num_tablets = 1;
+    // Create the table AFTER the stream has been created
+  auto table = ASSERT_RESULT(CreateTable(&test_cluster_, kNamespaceName, kTableName, num_tablets));
+  TableId table_id = ASSERT_RESULT(GetTableId(&test_cluster_, kNamespaceName, kTableName));
+  google::protobuf::RepeatedPtrField<master::TabletLocationsPB> tablets;
+
+  // Wait for a second for the table to be created and the tablets to be RUNNING
+  // Only after this will the tablets of this table get entries in cdc_state table
+  SleepFor(MonoDelta::FromSeconds(1));
+  ASSERT_OK(test_client()->GetTablets(table, 0, &tablets, /* partition_list_version=*/nullptr));
+  ASSERT_EQ(tablets.size(), num_tablets);
+
+  auto stream_id = ASSERT_RESULT(CreateDBStreamBasedOnCheckpointType(CDCCheckpointType::EXPLICIT));
+
+  // Create the index AFTER the stream has been created
+  auto conn = ASSERT_RESULT(test_cluster_.ConnectToDB(kNamespaceName));
+  ASSERT_OK(conn.ExecuteFormat("CREATE INDEX test_index ON $0 ($1)", kTableName, kValueColumnName));
+  // Wait for the bg thread to complete finding out new tables added in the namespace and adding
+  // them to CDC stream if relevant.
+  SleepFor(MonoDelta::FromSeconds(5));
+
+  std::unordered_set<TabletId> expected_tablets;
+  for(const auto& tablet : tablets) {
+    expected_tablets.insert(tablet.tablet_id());
+  }
+
+  std::unordered_set<TabletId> actual_tablets;
+  CdcStateTableRow expected_row;
+  CDCStateTable cdc_state_table(test_client());
+  Status s;
+  auto table_range =
+      ASSERT_RESULT(cdc_state_table.GetTableRange(CDCStateTableEntrySelector().IncludeAll(), &s));
+  for (auto row_result : table_range) {
+    ASSERT_OK(row_result);
+    auto& row = *row_result;
+
+    if (row.key.stream_id == stream_id) {
+      LOG(INFO) << "Read cdc_state table with tablet_id: " << row.key.tablet_id
+                << " stream_id: " << row.key.stream_id;
+      actual_tablets.insert(row.key.tablet_id);
+    }
+  }
+
+  LOG(INFO) << "Expected tablets: " << AsString(expected_tablets)
+            << ", Actual tablets: " << AsString(actual_tablets);
+  ASSERT_EQ(expected_tablets, actual_tablets);
+}
+
 }  // namespace cdc
 }  // namespace yb
