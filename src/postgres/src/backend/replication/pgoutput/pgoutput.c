@@ -57,6 +57,11 @@ static void publication_invalidation_cb(Datum arg, int cacheid,
 							uint32 hashvalue);
 static void update_replication_progress(LogicalDecodingContext *ctx);
 
+static bool is_yboutput_mode;
+
+static void
+support_yb_specific_replica_identity(bool support_yb_specific_replica_identity);
+
 /* Entry in the map used to remember which relation schemas we sent. */
 typedef struct RelationSyncEntry
 {
@@ -91,8 +96,11 @@ _PG_output_plugin_init(OutputPluginCallbacks *cb)
 	cb->filter_by_origin_cb = pgoutput_origin_filter;
 	cb->shutdown_cb = pgoutput_shutdown;
 
-	if (IsYugaByteEnabled())
+
+	if (IsYugaByteEnabled()) {
 		cb->yb_schema_change_cb = yb_pgoutput_schema_change;
+		cb->yb_support_yb_specifc_replica_identity_cb = support_yb_specific_replica_identity;
+	}
 }
 
 static void
@@ -370,7 +378,7 @@ pgoutput_change(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 
 				bool		*yb_old_is_omitted = NULL;
 				bool		*yb_new_is_omitted = NULL;
-				if (IsYugaByteEnabled())
+				if (IsYugaByteEnabled() && is_yboutput_mode)
 				{
 					yb_old_is_omitted =
 						(change->data.tp.oldtuple) ?
@@ -731,4 +739,10 @@ update_replication_progress(LogicalDecodingContext *ctx)
 		OutputPluginUpdateProgress(ctx);
 		changes_count = 0;
 	}
+}
+
+static void
+support_yb_specific_replica_identity(bool support_yb_specific_replica_identity)
+{
+	is_yboutput_mode = support_yb_specific_replica_identity;
 }

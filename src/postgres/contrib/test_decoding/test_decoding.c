@@ -41,6 +41,8 @@ typedef struct
 	bool		only_local;
 } TestDecodingData;
 
+static bool is_yboutput_mode;
+
 static void pg_decode_startup(LogicalDecodingContext *ctx, OutputPluginOptions *opt,
 				  bool is_init);
 static void pg_decode_shutdown(LogicalDecodingContext *ctx);
@@ -70,6 +72,9 @@ static void pg_decode_message(LogicalDecodingContext *ctx,
 static void
 yb_pgoutput_schema_change(LogicalDecodingContext *ctx, Oid relid);
 
+static void
+support_yb_specific_replica_identity(bool support_yb_specific_replica_identity);
+
 void
 _PG_init(void)
 {
@@ -91,8 +96,10 @@ _PG_output_plugin_init(OutputPluginCallbacks *cb)
 	cb->shutdown_cb = pg_decode_shutdown;
 	cb->message_cb = pg_decode_message;
 
-	if (IsYugaByteEnabled())
+	if (IsYugaByteEnabled()) {
 		cb->yb_schema_change_cb = yb_pgoutput_schema_change;
+		cb->yb_support_yb_specifc_replica_identity_cb = support_yb_specific_replica_identity;
+	}
 }
 
 
@@ -390,7 +397,7 @@ tuple_to_stringinfo(StringInfo s, TupleDesc tupdesc, HeapTuple tuple, bool skip_
 		/* print separator */
 		appendStringInfoChar(s, ':');
 
-		if (IsYugaByteEnabled())
+		if (IsYugaByteEnabled() && is_yboutput_mode)
 			yb_send_unchanged_toasted = yb_is_omitted && yb_is_omitted[natt];
 
 		/* print data */
@@ -575,4 +582,10 @@ static void
 yb_pgoutput_schema_change(LogicalDecodingContext *ctx, Oid relid)
 {
 	/* NOOP. */
+}
+
+static void
+support_yb_specific_replica_identity(bool support_yb_specific_replica_identity)
+{
+	is_yboutput_mode = support_yb_specific_replica_identity;
 }

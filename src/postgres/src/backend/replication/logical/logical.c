@@ -612,6 +612,15 @@ LoadOutputPlugin(OutputPluginCallbacks *callbacks, char *plugin)
 	/* ask the output plugin to fill the callback struct */
 	plugin_init(callbacks);
 
+	if (strcmp(plugin, "yboutput") == 0)
+	{
+		callbacks->yb_support_yb_specifc_replica_identity_cb(true);
+	}
+	else
+	{
+		callbacks->yb_support_yb_specifc_replica_identity_cb(false);
+	}
+
 	if (callbacks->begin_cb == NULL)
 		elog(ERROR, "output plugins have to register a begin callback");
 	if (callbacks->change_cb == NULL)

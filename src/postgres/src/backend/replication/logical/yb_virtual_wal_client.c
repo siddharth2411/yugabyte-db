@@ -208,6 +208,9 @@ InitVirtualWal(List *publication_names)
 	tables = YBCGetTables(publication_names);
 	table_oids = YBCGetTableOids(tables);
 
+	// TODO (sid): Throw error if any of the above tables have CHANGE as their replica
+	// identity and plugin used is not yboutput.
+
 	YBCInitVirtualWalForCDC(MyReplicationSlot->data.yb_stream_id, table_oids,
 							list_length(tables));
 
@@ -260,6 +263,10 @@ YBCReadRecord(XLogReaderState *state, XLogRecPtr RecPtr,
 			/* Get tables in publication and call UpdatePublicationTableList. */
 			tables = YBCGetTables(publication_names);
 			table_oids = YBCGetTableOids(tables);
+
+			// TODO (sid): Throw error if any of the above tables have CHANGE as their replica
+			// identity and plugin used is not yboutput.
+
 			YBCUpdatePublicationTableList(MyReplicationSlot->data.yb_stream_id,
 										  table_oids, list_length(tables));
 
