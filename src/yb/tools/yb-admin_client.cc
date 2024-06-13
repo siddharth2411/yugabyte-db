@@ -67,6 +67,7 @@
 #include "yb/gutil/strings/numbers.h"
 #include "yb/gutil/strings/split.h"
 
+#include "yb/master/catalog_entity_info.h"
 #include "yb/master/master_admin.proxy.h"
 #include "yb/master/master_backup.proxy.h"
 #include "yb/master/master_client.proxy.h"
@@ -3787,6 +3788,132 @@ Status ClusterAdminClient::YsqlBackfillReplicationSlotNameToCDCSDKStream(
         cout << "Error CDC stream with replication slot: " << resp.error().status().message()
              << endl;
         return StatusFromPB(resp.error().status());
+  }
+
+  return Status::OK();
+}
+
+Status ClusterAdminClient::AddStreamCreationTimeToCDCSDKStreams(const std::string& namespace_name) {
+  // Get the list of CDC streams for the namespace.
+  master::ListCDCStreamsRequestPB req;
+  master::ListCDCStreamsResponsePB resp;
+  req.set_id_type(yb::master::IdTypePB::NAMESPACE_ID);
+
+  if (!namespace_name.empty()) {
+    cout << "Filtering out DB streams for the namespace: " << namespace_name << "\n";
+    master::GetNamespaceInfoResponsePB namespace_info_resp;
+    RETURN_NOT_OK(
+        yb_client_->GetNamespaceInfo("", namespace_name, YQL_DATABASE_PGSQL, &namespace_info_resp));
+    req.set_namespace_id(namespace_info_resp.namespace_().id());
+  }
+
+  auto deadline = CoarseMonoClock::now() + timeout_;
+  RpcController rpc;
+  rpc.set_deadline(deadline);
+  RETURN_NOT_OK(master_replication_proxy_->ListCDCStreams(req, &resp, &rpc));
+
+  if (resp.has_error()) {
+    cout << "Error getting CDC stream list: " << resp.error().status().message() << endl;
+    return StatusFromPB(resp.error().status());
+  }
+
+  std::unordered_map<std::string, master::CDCStreamInfoPB> streams_to_be_updated;
+  std::unordered_set<std::string> stream_ids_to_be_updated;
+  for(const auto& stream_info : resp.streams()) {
+    if(!stream_info.has_stream_creation_time()) {
+      stream_ids_to_be_updated.insert(stream_info.stream_id());
+      streams_to_be_updated[stream_info.stream_id()] = stream_info;
+    }
+  }
+
+  // Update the CDC stream metadata
+  master::UpdateCDCStreamRequestPB update_req;
+  master::UpdateCDCStreamResponsePB update_resp;
+  auto stream_creation_time = GetCurrentTimeMicros();
+  for (const auto& [stream_id, stream_info] : streams_to_be_updated) {
+    master::SysCDCStreamEntryPB updated_stream_info;
+    updated_stream_info.mutable_table_id()->CopyFrom(stream_info.table_id());
+
+    for (const auto& entry : stream_info.options()) {
+      auto key = entry.key();
+      auto value = entry.value();
+      if (key == cdc::kStreamState) {
+        if (value == "ACTIVE") {
+          updated_stream_info.set_state(master::SysCDCStreamEntryPB::ACTIVE);
+        } else if (value == "DELETING") {
+          updated_stream_info.set_state(master::SysCDCStreamEntryPB::DELETING);
+        } else if (value == "DELETED") {
+          updated_stream_info.set_state(master::SysCDCStreamEntryPB::DELETED);
+        } else if (value == "DELETING_METADATA") {
+          updated_stream_info.set_state(master::SysCDCStreamEntryPB::DELETING_METADATA);
+        } else if (value == "INITIATED") {
+          updated_stream_info.set_state(master::SysCDCStreamEntryPB::INITIATED);
+        }
+        continue;
+      }
+      auto new_option = updated_stream_info.add_options();
+      new_option->set_key(key);
+      new_option->set_value(value);
+    }
+
+    if(stream_info.has_namespace_id()) {
+    const auto& ns_id = stream_info.namespace_id();
+    updated_stream_info.set_namespace_id(ns_id);
+    }
+
+    if (stream_info.has_transactional()) {
+      updated_stream_info.set_transactional(stream_info.transactional());
+    }
+
+    if (stream_info.has_cdcsdk_ysql_replication_slot_name()) {
+      updated_stream_info.set_cdcsdk_ysql_replication_slot_name(
+          stream_info.cdcsdk_ysql_replication_slot_name());
+    }
+
+    if (stream_info.has_cdcsdk_consistent_snapshot_option() &&
+        stream_info.has_cdcsdk_consistent_snapshot_time()) {
+      auto cdcsdk_stream_metadata = updated_stream_info.mutable_cdcsdk_stream_metadata();
+      cdcsdk_stream_metadata->set_consistent_snapshot_option(
+          stream_info.cdcsdk_consistent_snapshot_option());
+      cdcsdk_stream_metadata->set_snapshot_time(stream_info.cdcsdk_consistent_snapshot_time());
+    }
+
+    for (const auto& [stream_id, replica_identity] : stream_info.replica_identity_map()) {
+      updated_stream_info.mutable_replica_identity_map()->insert({stream_id, replica_identity});
+    }
+
+    if(stream_info.has_cdcsdk_ysql_replication_slot_plugin_name()) {
+      updated_stream_info.set_cdcsdk_ysql_replication_slot_plugin_name(
+          stream_info.cdcsdk_ysql_replication_slot_plugin_name());
+    }
+
+    updated_stream_info.set_stream_creation_time(stream_creation_time);
+
+    auto stream = update_req.add_streams();
+    stream->mutable_entry()->CopyFrom(updated_stream_info);
+    stream->set_stream_id(stream_id);
+  }
+
+  if (stream_ids_to_be_updated.size() > 0) {
+    deadline = CoarseMonoClock::now() + timeout_;
+    rpc.Reset();
+    rpc.set_deadline(deadline);
+    RETURN_NOT_OK(master_replication_proxy_->UpdateCDCStream(update_req, &update_resp, &rpc));
+
+    if (update_resp.has_error()) {
+      cout << "Error updating CDC streams: " << update_resp.error().status().message() << endl;
+      return StatusFromPB(update_resp.error().status());
+    }
+
+    cout << "Successfully added current time as stream creation time to the following CDC streams: "
+         << AsString(stream_ids_to_be_updated) << "\n";
+  } else {
+    if (namespace_name.empty()) {
+      cout << "No update required! All streams have stream creation time.\n";
+    } else {
+      cout << "No update required! All streams on namespace " << namespace_name
+           << " have stream creation time.\n";
+    }
   }
 
   return Status::OK();

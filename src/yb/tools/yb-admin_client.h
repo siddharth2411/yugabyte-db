@@ -409,6 +409,8 @@ class ClusterAdminClient {
   Status YsqlBackfillReplicationSlotNameToCDCSDKStream(
       const std::string& stream_id, const std::string& replication_slot_name);
 
+  Status AddStreamCreationTimeToCDCSDKStreams(const std::string& namespace_name);
+
   Status SetupNamespaceReplicationWithBootstrap(const std::string& replication_id,
                                   const std::vector<std::string>& producer_addresses,
                                   const TypedNamespaceName& ns,

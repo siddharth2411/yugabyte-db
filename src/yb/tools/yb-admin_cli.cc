@@ -1945,6 +1945,23 @@ Status ysql_backfill_change_data_stream_with_replication_slot_action(
   return Status::OK();
 }
 
+const auto add_stream_creation_time_to_change_data_streams_args = "[<namespace>]";
+Status add_stream_creation_time_to_change_data_streams_action(
+    const ClusterAdminCli::CLIArguments& args, ClusterAdminClient* client) {
+  if (args.size() != 0 && args.size() != 1) {
+    return ClusterAdminCli::kInvalidArguments;
+  }
+
+  const string namespace_name = (args.size() == 1 ? args[0] : "");
+  string msg = (args.size() == 1)
+                   ? Format(
+                         "Unable to add stream creation time for CDC streams on namespace $0",
+                         namespace_name)
+                   : "Unable to add stream creation time for CDC streams";
+  RETURN_NOT_OK_PREPEND(client->AddStreamCreationTimeToCDCSDKStreams(namespace_name), msg);
+  return Status::OK();
+}
+
 const auto setup_universe_replication_args =
     "<producer_universe_uuid> <producer_master_addresses> "
     "<comma_separated_list_of_table_ids> [<comma_separated_list_of_producer_bootstrap_ids>] "
@@ -2731,6 +2748,7 @@ void ClusterAdminCli::RegisterCommandHandlers() {
   REGISTER_COMMAND(list_change_data_streams);
   REGISTER_COMMAND(get_change_data_stream_info);
   REGISTER_COMMAND(ysql_backfill_change_data_stream_with_replication_slot);
+  REGISTER_COMMAND(add_stream_creation_time_to_change_data_streams);
   // xCluster Source commands
   REGISTER_COMMAND(bootstrap_cdc_producer);
   REGISTER_COMMAND(list_cdc_streams);

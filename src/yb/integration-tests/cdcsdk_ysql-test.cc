@@ -8519,5 +8519,90 @@ TEST_F(CDCSDKYsqlTest, TestGetChangesResponseSize) {
   ASSERT_TRUE(seen_resp_greater_than_limit);
 }
 
+Status CDCSDKYsqlTest::AddStreamCreationTimeToCDCSDKStreams() {
+  string tool_path = GetToolPath("../bin", "yb-admin");
+  vector<string> argv;
+  argv.push_back(tool_path);
+  argv.push_back("--master_addresses");
+  argv.push_back(AsString(test_cluster_.mini_cluster_->GetMasterAddresses()));
+  argv.push_back("add_stream_creation_time_to_change_data_streams");
+  RETURN_NOT_OK(Subprocess::Call(argv));
+
+  return Status::OK();
+}
+
+TEST_F(CDCSDKYsqlTest, TestAddingStreamCreationTimeToNonConsistentSnapshotStreams) {
+  // Setup cluster.
+  ASSERT_OK(SetUpWithParams(3, 3, false));
+
+  const vector<string> table_list_suffix = {"_1", "_2", "_3", "_4", "_5"};
+  const int kNumTables = 5;
+  vector<YBTableName> table(kNumTables);
+  int idx = 0;
+  vector<google::protobuf::RepeatedPtrField<master::TabletLocationsPB>> tablets(kNumTables);
+
+  while (idx < 3) {
+    table[idx] = ASSERT_RESULT(CreateTable(
+        &test_cluster_, kNamespaceName, kTableName, 1, true, false, 0, true,
+        table_list_suffix[idx]));
+    ASSERT_OK(test_client()->GetTablets(
+        table[idx], 0, &tablets[idx], /* partition_list_version = */ nullptr));
+    ASSERT_OK(WriteEnumsRows(
+        0 /* start */, 100 /* end */, &test_cluster_, table_list_suffix[idx], kNamespaceName,
+        kTableName));
+    idx += 1;
+  }
+  std::unordered_set<xrepl::StreamId> stream_ids;
+  auto stream_id_1 = ASSERT_RESULT(CreateDBStream(EXPLICIT));
+  stream_ids.insert(stream_id_1);
+  auto stream_id_2 = ASSERT_RESULT(CreateDBStreamWithReplicationSlot());
+  stream_ids.insert(stream_id_2);
+
+  auto streams = ASSERT_RESULT(ListDBStreams());
+  for(const auto& stream : streams.streams()) {
+    ASSERT_FALSE(stream.has_stream_creation_time());
+  }
+
+  // Add stream creation time to all the streams.
+  ASSERT_OK(AddStreamCreationTimeToCDCSDKStreams());
+
+  streams = ASSERT_RESULT(ListDBStreams());
+  for(const auto& stream : streams.streams()) {
+    ASSERT_TRUE(stream.has_stream_creation_time());
+  }
+
+  // create a new table and verify that it gets added to stream metadata and stream creation time is
+  // still present.
+  table[idx] = ASSERT_RESULT(CreateTable(
+      &test_cluster_, kNamespaceName, kTableName, 1, true, false, 0, true, table_list_suffix[idx]));
+  ASSERT_OK(test_client()->GetTablets(
+      table[idx], 0, &tablets[idx], /* partition_list_version = */ nullptr));
+
+  // Wait for the bg thread to add the new table in the stream metadata.
+  SleepFor(MonoDelta::FromSeconds(5 * kTimeMultiplier));
+  streams = ASSERT_RESULT(ListDBStreams());
+  for (const auto& stream : streams.streams()) {
+    ASSERT_TRUE(stream.has_stream_creation_time());
+    bool new_table_found_in_stream_metadata = false;
+    for (const auto& table_id : stream.table_id()) {
+      if (table_id == table[idx].table_id()) {
+        new_table_found_in_stream_metadata = true;
+      }
+    }
+    ASSERT_TRUE(new_table_found_in_stream_metadata);
+  }
+
+  // Restart leader master to verify persisted stream metadata contains the stream creation time.
+  auto leader_master = ASSERT_RESULT(test_cluster_.mini_cluster_->GetLeaderMiniMaster());
+  ASSERT_OK(leader_master->Restart());
+  LOG(INFO) << "Master Restarted";
+  SleepFor(MonoDelta::FromSeconds(5));
+
+  streams = ASSERT_RESULT(ListDBStreams());
+  for (const auto& stream : streams.streams()) {
+    ASSERT_TRUE(stream.has_stream_creation_time());
+  }
+}
+
 }  // namespace cdc
 }  // namespace yb
