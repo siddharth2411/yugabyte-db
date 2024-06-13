@@ -1846,6 +1846,24 @@ Status get_change_data_stream_info_action(
   return Status::OK();
 }
 
+const auto remove_non_user_tables_from_change_data_stream_args = "[<namespace>]";
+Status remove_non_user_tables_from_change_data_stream_action(
+    const ClusterAdminCli::CLIArguments& args, ClusterAdminClient* client) {
+  if (args.size() != 0 && args.size() != 1) {
+    return ClusterAdminCli::kInvalidArguments;
+  }
+
+  const string namespace_name = args.size() == 1 ? args[0] : "";
+  string msg =
+      (args.size() == 1)
+          ? Format(
+                "Unable to remove non user tables from CDC streams on namespace $0", namespace_name)
+          : "Unable to remove non user tables from CDC streams";
+
+  RETURN_NOT_OK_PREPEND(client->RemoveNonUserTablesFromCDCSDKStreams(namespace_name), msg);
+  return Status::OK();
+}
+
 const auto setup_universe_replication_args =
     "<producer_universe_uuid> <producer_master_addresses> "
     "<comma_separated_list_of_table_ids> [<comma_separated_list_of_producer_bootstrap_ids>] "
@@ -2251,6 +2269,7 @@ void ClusterAdminCli::RegisterCommandHandlers() {
   REGISTER_COMMAND(list_cdc_streams);
   REGISTER_COMMAND(list_change_data_streams);
   REGISTER_COMMAND(get_change_data_stream_info);
+  REGISTER_COMMAND(remove_non_user_tables_from_change_data_stream);
   REGISTER_COMMAND(setup_universe_replication);
   REGISTER_COMMAND(delete_universe_replication);
   REGISTER_COMMAND(alter_universe_replication);

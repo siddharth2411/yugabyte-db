@@ -400,6 +400,8 @@ class ClusterAdminClient {
 
   Status GetCDCDBStreamInfo(const std::string& db_stream_id);
 
+  Status RemoveNonUserTablesFromCDCSDKStreams(const std::string& namespace_name);
+
   Status SetupNamespaceReplicationWithBootstrap(const std::string& replication_id,
                                   const std::vector<std::string>& producer_addresses,
                                   const TypedNamespaceName& ns,

@@ -3915,6 +3915,192 @@ Status ClusterAdminClient::GetCDCDBStreamInfo(const std::string& db_stream_id) {
   return Status::OK();
 }
 
+Status ClusterAdminClient::RemoveNonUserTablesFromCDCSDKStreams(
+    const std::string& namespace_name) {
+  // Get the list of CDC streams for the namespace.
+  master::ListCDCStreamsRequestPB req;
+  master::ListCDCStreamsResponsePB resp;
+  req.set_id_type(yb::master::IdTypePB::NAMESPACE_ID);
+
+  if (!namespace_name.empty()) {
+        cout << "Filtering out DB streams for the namespace: " << namespace_name << "\n\n";
+        master::GetNamespaceInfoResponsePB namespace_info_resp;
+        RETURN_NOT_OK(yb_client_->GetNamespaceInfo(
+            "", namespace_name, YQL_DATABASE_PGSQL, &namespace_info_resp));
+        req.set_namespace_id(namespace_info_resp.namespace_().id());
+  }
+
+  auto deadline = CoarseMonoClock::now() + timeout_;
+  RpcController rpc;
+  rpc.set_deadline(deadline);
+  RETURN_NOT_OK(master_replication_proxy_->ListCDCStreams(req, &resp, &rpc));
+
+  if (resp.has_error()) {
+    cout << "Error getting CDC stream list: " << resp.error().status().message() << endl;
+    return StatusFromPB(resp.error().status());
+  }
+
+  cout << "Sid: CDC Streams: \r\n" << resp.DebugString();
+
+  // Find user tables for all the namespace which have a CDCSDK stream.
+  std::unordered_map<std::string, master::CDCStreamInfoPB> stream_id_to_stream_info;
+  std::unordered_map<std::string, std::unordered_set<std::string>> namespace_to_user_tables;
+  master::NamespaceIdentifierPB ns_identifier;
+  for (const auto& stream_info : resp.streams()) {
+    cout <<"stream_id: " << stream_info.stream_id() << "\n";
+    const auto stream_id = stream_info.stream_id();
+    stream_id_to_stream_info[stream_id] = stream_info;
+    const auto ns_id = stream_info.namespace_id();
+    if (!namespace_to_user_tables.contains(ns_id)) {
+      ns_identifier.set_id(ns_id);
+      const auto tables = VERIFY_RESULT(yb_client_->ListUserTables(ns_identifier));
+      for (const auto& table : tables) {
+        namespace_to_user_tables[ns_id].insert(table.table_id());
+      }
+    }
+    ns_identifier.Clear();
+  }
+
+  // Find out tables per stream that have to be removed from CDC stream metadata.
+  std::unordered_map<std::string, std::unordered_set<std::string>> stream_to_tables_to_be_removed;
+  std::unordered_set<std::string> tables_to_removed;
+  for (const auto& stream_info : resp.streams()) {
+    auto stream_id = stream_info.stream_id();
+    auto ns_id = stream_info.namespace_id();
+    for (const auto& table_id : stream_info.table_id()) {
+      if (!namespace_to_user_tables[ns_id].contains(table_id)) {
+        stream_to_tables_to_be_removed[stream_id].insert(table_id);
+      }
+    }
+    cout << "stream_id: " << stream_id
+         << ", tables to be removed: " << AsString(stream_to_tables_to_be_removed[stream_id]) << "\n";
+  }
+
+  // Update the CDC stream metadata
+  master::UpdateCDCStreamRequestPB update_req;
+  master::UpdateCDCStreamResponsePB update_resp;
+
+  for (const auto& [stream_id, tables_to_be_removed] : stream_to_tables_to_be_removed) {
+    if (tables_to_be_removed.size() > 0) {
+      cout << "stream_id " << stream_id << " will have to updated\n";
+      const auto& stream_info = stream_id_to_stream_info[stream_id];
+      const auto& ns_id = stream_info.namespace_id();
+      master::SysCDCStreamEntryPB updated_stream_info;
+      updated_stream_info.set_namespace_id(ns_id);
+      cout << "namespace set\n";
+
+      if (stream_info.has_transactional()) {
+        updated_stream_info.set_transactional(stream_info.transactional());
+      }
+
+      cout << "transactional set\n";
+
+      if (stream_info.has_stream_creation_time()) {
+        updated_stream_info.set_stream_creation_time(stream_info.stream_creation_time());
+      }
+
+      cout << "stream creation time set\n";
+
+      if (stream_info.has_cdcsdk_ysql_replication_slot_name()) {
+        updated_stream_info.set_cdcsdk_ysql_replication_slot_name(
+            stream_info.cdcsdk_ysql_replication_slot_name());
+      }
+
+      cout << "replication slot name set\n";
+
+      if (stream_info.has_cdcsdk_consistent_snapshot_option()) {
+        auto cdcsdk_stream_metadata = updated_stream_info.mutable_cdcsdk_stream_metadata();
+        cdcsdk_stream_metadata->set_consistent_snapshot_option(
+            stream_info.cdcsdk_consistent_snapshot_option());
+      }
+
+      cout << "consistent snapshot option set\n";
+
+      // updated_stream_info.mutable_options()->CopyFrom(stream_info.options());
+      for (const auto& entry : stream_info.options()) {
+        auto key = entry.key();
+        auto value = entry.value();
+        if (key == cdc::kStreamState) {
+          // We will set state explicitly.
+          if (value == "ACTIVE") {
+            updated_stream_info.set_state(master::SysCDCStreamEntryPB::ACTIVE);
+          } else if (value == "DELETING") {
+            updated_stream_info.set_state(master::SysCDCStreamEntryPB::DELETING);
+          } else if (value == "DELETED") {
+            updated_stream_info.set_state(master::SysCDCStreamEntryPB::DELETED);
+          } else if (value == "DELETING_METADATA") {
+            updated_stream_info.set_state(master::SysCDCStreamEntryPB::DELETING_METADATA);
+          } else if (value == "INITIATED") {
+            updated_stream_info.set_state(master::SysCDCStreamEntryPB::INITIATED);
+          }
+          continue;
+        }
+        auto new_option = updated_stream_info.add_options();
+        new_option->set_key(key);
+        new_option->set_value(value);
+      }
+      // updated_stream_info.set_state(master::SysCDCStreamEntryPB::ACTIVE);
+
+      cout << "options set\n";
+
+      // for (const auto& entry : stream_info.options()) {
+      //   auto key = entry.key();
+      //   auto value = entry.value();
+      //   if (key == cdc::kStreamState) {
+      //     // We will set state explicitly.
+      //     if (value == "ACTIVE") {
+      //       updated_stream_info.set_state(master::SysCDCStreamEntryPB::ACTIVE);
+      //     } else if (value == "DELETING") {
+      //       updated_stream_info.set_state(master::SysCDCStreamEntryPB::DELETING);
+      //     } else if (value == "DELETED") {
+      //       updated_stream_info.set_state(master::SysCDCStreamEntryPB::DELETED);
+      //     } else if (value == "DELETING_METADATA") {
+      //       updated_stream_info.set_state(master::SysCDCStreamEntryPB::DELETING_METADATA);
+      //     } else if (value == "INITIATED") {
+      //       updated_stream_info.set_state(master::SysCDCStreamEntryPB::INITIATED);
+      //     }
+      //   }
+      // }
+
+      cout << "state set\n";
+
+      for (const auto& table_id : stream_info.table_id()) {
+        if (!stream_to_tables_to_be_removed[stream_id].contains(table_id)) {
+          updated_stream_info.add_table_id(table_id);
+        }
+      }
+
+      cout << "tables set\n";
+      auto stream = update_req.add_streams();
+      stream->mutable_entry()->CopyFrom(updated_stream_info);
+      stream->set_stream_id(stream_id);
+      cout << "Added stream_id " << stream_id << " for updating\n";
+    }
+  }
+
+  cout << "Calling UpdateCDCStream: " << update_req.DebugString();
+
+
+
+
+
+  deadline = CoarseMonoClock::now() + timeout_;
+  rpc.Reset();
+  rpc.set_deadline(deadline);
+  RETURN_NOT_OK(master_replication_proxy_->UpdateCDCStream(update_req, &update_resp, &rpc));
+
+  cout << "UpdateCDCStream call complete ";
+
+  if (update_resp.has_error()) {
+    cout << "Error updating CDC stream: " << update_resp.error().status().message() << endl;
+    return StatusFromPB(update_resp.error().status());
+  }
+
+  cout << "Successfully removed non-user tables from the CDC streams.\n";
+
+  return Status::OK();
+}
+
 Status ClusterAdminClient::WaitForSetupUniverseReplicationToFinish(
     const string& replication_group_id) {
   master::IsSetupUniverseReplicationDoneRequestPB req;
