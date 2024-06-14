@@ -781,6 +781,10 @@ class CDCSDKYsqlTest : public CDCSDKTestBase {
   std::string GetPubRefreshTimesString(vector<uint64_t> pub_refresh_times);
 
   void TestNonUserTableShouldNotGetAddedToCDCStream (bool create_consistent_snapshot_stream);
+
+  Status RemoveTableFromCDCSDKStream(const xrepl::StreamId& stream_id, const TableId& table_id);
+
+  void TestManualTableRemovalFromCDCStream(bool use_consistent_snapshot_stream);
 };
 
 }  // namespace cdc
