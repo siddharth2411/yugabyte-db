@@ -3792,6 +3792,28 @@ Status ClusterAdminClient::YsqlBackfillReplicationSlotNameToCDCSDKStream(
   return Status::OK();
 }
 
+Status ClusterAdminClient::RemoveTableFromCDCSDKStream(
+    const std::string& stream_id, const std::string& table_id) {
+  master::RemoveTableFromCDCSDKStreamRequestPB req;
+  master::RemoveTableFromCDCSDKStreamResponsePB resp;
+
+  req.set_stream_id(stream_id);
+  req.set_table_id(table_id);
+
+  RpcController rpc;
+  rpc.set_timeout(timeout_);
+  RETURN_NOT_OK(master_replication_proxy_->RemoveTableFromCDCSDKStream(req, &resp, &rpc));
+
+  if (resp.has_error()) {
+    cout << "Error removing table from CDC stream: " << resp.error().status().message() << endl;
+    return StatusFromPB(resp.error().status());
+  }
+
+  cout << "Succesfully removed table: " << table_id << " from CDC stream: " << stream_id << "\n";
+
+  return Status::OK();
+}
+
 Status ClusterAdminClient::WaitForSetupUniverseReplicationToFinish(
     const string& replication_group_id) {
   master::IsSetupUniverseReplicationDoneRequestPB req;
