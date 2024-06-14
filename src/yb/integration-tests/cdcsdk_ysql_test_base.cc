@@ -4503,5 +4503,20 @@ Result<string> CDCSDKYsqlTest::GetUniverseId(PostgresMiniCluster* cluster) {
     return oss.str();
   }
 
+  Status CDCSDKYsqlTest::RemoveTableFromCDCSDKStream(
+      const xrepl::StreamId& stream_id, const TableId& table_id) {
+    string tool_path = GetToolPath("../bin", "yb-admin");
+    vector<string> argv;
+    argv.push_back(tool_path);
+    argv.push_back("--master_addresses");
+    argv.push_back(AsString(test_cluster_.mini_cluster_->GetMasterAddresses()));
+    argv.push_back("remove_table_from_change_data_stream");
+    argv.push_back(stream_id.ToString());
+    argv.push_back(table_id);
+    RETURN_NOT_OK(Subprocess::Call(argv));
+
+    return Status::OK();
+  }
+
 } // namespace cdc
 } // namespace yb
