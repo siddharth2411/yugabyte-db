@@ -6040,6 +6040,119 @@ Status CatalogManager::YsqlBackfillReplicationSlotNameToCDCSDKStream(
   return Status::OK();
 }
 
+Status CatalogManager::RemoveTableFromCDCSDKStream(
+    const RemoveTableFromCDCSDKStreamRequestPB* req, RemoveTableFromCDCSDKStreamResponsePB* resp,
+    rpc::RpcContext* rpc) {
+  LOG(INFO) << "Servicing RemoveTableFromCDCSDKStream request from " << RequestorString(rpc) << ": "
+            << req->ShortDebugString();
+
+  if (!req->has_stream_id() || !req->has_table_id()) {
+    RETURN_INVALID_REQUEST_STATUS("Both CDC Stream ID and table ID must be provided");
+  }
+
+  auto stream_id = VERIFY_RESULT(xrepl::StreamId::FromString(req->stream_id()));
+  auto table_id = req->table_id();
+
+  CDCStreamInfoPtr stream;
+  {
+    SharedLock lock(mutex_);
+    stream = FindPtrOrNull(cdc_stream_map_, stream_id);
+  }
+
+  if (stream == nullptr || stream->LockForRead()->is_deleting()) {
+    return STATUS(
+        NotFound, "Could not find CDC stream", MasterError(MasterErrorPB::OBJECT_NOT_FOUND));
+  }
+
+  if (!stream->IsCDCSDKStream()) {
+    RETURN_INVALID_REQUEST_STATUS("Not a CDC stream");
+  }
+
+  auto stream_ns_id = stream->LockForRead()->namespace_id();
+
+  scoped_refptr<TableInfo> table;
+  {
+    SharedLock lock(mutex_);
+    table = tables_->FindTableOrNull(table_id);
+  }
+
+  if (table == nullptr || table->LockForRead()->is_deleting()) {
+    return STATUS(NotFound, "Could not find table", MasterError(MasterErrorPB::OBJECT_NOT_FOUND));
+  } else {
+    auto table_ns_id = table->LockForRead()->namespace_id();
+    if (table_ns_id != stream_ns_id) {
+      RETURN_INVALID_REQUEST_STATUS("Stream and Table are not under the same namespace");
+    }
+
+    // First, remove the table from the CDC stream metadata and then update the
+    // checkpoint of corresponding cdc state table entries to max.
+    {
+      auto ltm = stream->LockForWrite();
+      bool need_to_update_stream = false;
+
+      // Remove table info, that is to removed from the cdc_stream_map_ and update the
+      // system catalog.
+      auto table_id_iter = std::find(ltm->table_id().begin(), ltm->table_id().end(), table_id);
+      if (table_id_iter != ltm->table_id().end()) {
+        need_to_update_stream = true;
+        ltm.mutable_data()->pb.mutable_table_id()->erase(table_id_iter);
+      } else {
+        return STATUS(NotFound, "Table not found in CDC stream metadata");
+      }
+
+      if (need_to_update_stream) {
+        RETURN_ACTION_NOT_OK(
+            sys_catalog_->Upsert(leader_ready_term(), stream),
+            "Updating CDC streams in system catalog");
+
+        {
+          LockGuard lock(mutex_);
+          cdcsdk_tables_to_stream_map_[table_id].insert(stream->StreamId());
+        }
+      }
+      ltm.Commit();
+    }
+
+    // Get all the tablets for the table to be removed.
+    TabletInfos tablets;
+    tablets = table->GetTablets(IncludeInactive::kTrue);
+
+    std::unordered_set<TabletId> tablet_entries_to_be_removed;
+    for (const auto& tablet : tablets) {
+      tablet_entries_to_be_removed.insert(tablet->tablet_id());
+    }
+
+    Status iteration_status;
+    auto all_entry_keys = VERIFY_RESULT(
+        cdc_state_table_->GetTableRange({} /* just key columns */, &iteration_status));
+    std::vector<cdc::CDCStateTableEntry> entries_to_update;
+
+    // Remove all tablet, stream pairs from cdc_state for the given table.
+    for (const auto& entry_result : all_entry_keys) {
+      RETURN_NOT_OK(entry_result);
+      const auto& entry = *entry_result;
+
+      if (entry.key.stream_id == stream_id &&
+          tablet_entries_to_be_removed.contains(entry.key.tablet_id)) {
+        cdc::CDCStateTableEntry update_entry(entry.key);
+        update_entry.checkpoint = OpId::Max();
+        entries_to_update.emplace_back(std::move(update_entry));
+        LOG(INFO) << "Setting checkpoint to OpId::Max() for CDCSDK stream - "
+                  << entry.key.ToString();
+      }
+    }
+    RETURN_NOT_OK(iteration_status);
+
+    if (!entries_to_update.empty()) {
+      RETURN_NOT_OK_PREPEND(
+          cdc_state_table_->UpdateEntries(entries_to_update),
+          "Error setting checkpoint to OpId::Max() in cdc_state table");
+    }
+  }
+
+  return Status::OK();
+}
+
 std::vector<SysUniverseReplicationEntryPB>
 CatalogManager::GetAllXClusterUniverseReplicationInfos() {
   SharedLock lock(mutex_);
