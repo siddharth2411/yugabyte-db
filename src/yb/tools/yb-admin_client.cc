@@ -3800,10 +3800,12 @@ Status ClusterAdminClient::DisableDynamicTableAdditionOnCDCSDKStream(const std::
 
   RpcController rpc;
   rpc.set_timeout(timeout_);
-  RETURN_NOT_OK(master_replication_proxy_->DisableDynamicTableAdditionOnCDCSDKStream(req, &resp, &rpc));
+  RETURN_NOT_OK(
+      master_replication_proxy_->DisableDynamicTableAdditionOnCDCSDKStream(req, &resp, &rpc));
 
   if (resp.has_error()) {
-    cout << "Error disabling dynamic table addition from CDC stream: " << resp.error().status().message() << endl;
+    cout << "Error disabling dynamic table addition from CDC stream: "
+         << resp.error().status().message() << endl;
     return StatusFromPB(resp.error().status());
   }
 
@@ -3827,11 +3829,13 @@ Status ClusterAdminClient::RemoveUserTableFromCDCSDKStream(
   RETURN_NOT_OK(master_replication_proxy_->RemoveUserTableFromCDCSDKStream(req, &resp, &rpc));
 
   if (resp.has_error()) {
-    cout << "Error removing user table from CDC stream: " << resp.error().status().message() << endl;
+    cout << "Error removing user table from CDC stream: " << resp.error().status().message()
+         << endl;
     return StatusFromPB(resp.error().status());
   }
 
-  cout << "Succesfully removed user table: " << table_id << " from CDC stream: " << stream_id << "\n";
+  cout << "Succesfully removed user table: " << table_id << " from CDC stream: " << stream_id
+       << "\n";
 
   return Status::OK();
 }

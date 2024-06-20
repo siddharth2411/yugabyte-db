@@ -1266,7 +1266,8 @@ CDCStreamInfo::GetReplicaIdentityMap() const {
 
 bool CDCStreamInfo::IsDynamicTableAdditionDisabled() const {
   auto l = LockForRead();
-  return l->pb.has_cdcsdk_disable_dynamic_table_addition() && l->pb.cdcsdk_disable_dynamic_table_addition();
+  return l->pb.has_cdcsdk_disable_dynamic_table_addition() &&
+         l->pb.cdcsdk_disable_dynamic_table_addition();
 }
 
 std::string CDCStreamInfo::ToString() const {
