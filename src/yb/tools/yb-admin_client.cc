@@ -3814,13 +3814,19 @@ Status ClusterAdminClient::DisableDynamicTableAdditionOnCDCSDKStream(const std::
   return Status::OK();
 }
 
-Status ClusterAdminClient::RemoveUserTableFromCDCSDKStream(
+Status ClusterAdminClient::RemoveTableFromCDCSDKStream(
     const std::string& stream_id, const std::string& table_id) {
   master::RemoveUserTableFromCDCSDKStreamRequestPB req;
   master::RemoveUserTableFromCDCSDKStreamResponsePB resp;
 
   req.set_stream_id(stream_id);
-  req.set_table_id(table_id);
+
+  if (!table_id.empty()) {
+    req.set_table_id(table_id);
+    req.set_remove_user_table(true);
+  } else {
+    req.set_remove_user_table(false);
+  }
 
   RpcController rpc;
   // Set a higher timeout since this RPC verifes that each cdc state table entry for the stream

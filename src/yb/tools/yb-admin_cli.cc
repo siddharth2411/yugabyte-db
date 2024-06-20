@@ -1970,7 +1970,21 @@ Status remove_user_table_from_change_data_stream_action(
   const string table_id = args[1];
   string msg = Format("Unable to remove table $0 from CDC stream $1", table_id, stream_id);
 
-  RETURN_NOT_OK_PREPEND(client->RemoveUserTableFromCDCSDKStream(stream_id, table_id), msg);
+  RETURN_NOT_OK_PREPEND(client->RemoveTableFromCDCSDKStream(stream_id, table_id), msg);
+  return Status::OK();
+}
+
+const auto remove_non_user_table_from_change_data_stream_args = "<stream_id>n";
+Status remove_non_user_table_from_change_data_stream_action(
+    const ClusterAdminCli::CLIArguments& args, ClusterAdminClient* client) {
+  if (args.size() != 1) {
+    return ClusterAdminCli::kInvalidArguments;
+  }
+
+  const string stream_id = args[0];
+  string msg = Format("Unable to remove non user tables $0 from CDC stream $0", stream_id);
+
+  RETURN_NOT_OK_PREPEND(client->RemoveTableFromCDCSDKStream(stream_id), msg);
   return Status::OK();
 }
 
@@ -2762,6 +2776,7 @@ void ClusterAdminCli::RegisterCommandHandlers() {
   REGISTER_COMMAND(ysql_backfill_change_data_stream_with_replication_slot);
   REGISTER_COMMAND(disable_dynamic_table_addition_on_change_data_stream);
   REGISTER_COMMAND(remove_user_table_from_change_data_stream);
+  REGISTER_COMMAND(remove_non_user_table_from_change_data_stream);
   // xCluster Source commands
   REGISTER_COMMAND(bootstrap_cdc_producer);
   REGISTER_COMMAND(list_cdc_streams);
