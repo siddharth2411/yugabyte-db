@@ -1264,6 +1264,11 @@ CDCStreamInfo::GetReplicaIdentityMap() const {
   return l->pb.replica_identity_map();
 }
 
+bool CDCStreamInfo::IsDynamicTableAdditionDisabled() const {
+  auto l = LockForRead();
+  return l->pb.has_cdcsdk_disable_dynamic_table_addition() && l->pb.cdcsdk_disable_dynamic_table_addition();
+}
+
 std::string CDCStreamInfo::ToString() const {
   auto l = LockForRead();
   if (l->pb.has_namespace_id()) {

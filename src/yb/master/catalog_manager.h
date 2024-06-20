@@ -1352,9 +1352,15 @@ class CatalogManager : public tserver::TabletPeerLookupIf,
       YsqlBackfillReplicationSlotNameToCDCSDKStreamResponsePB* resp,
       rpc::RpcContext* rpc);
 
-  Status RemoveTableFromCDCSDKStream(
-      const RemoveTableFromCDCSDKStreamRequestPB* req, RemoveTableFromCDCSDKStreamResponsePB* resp,
-      rpc::RpcContext* rpc);
+  Status RemoveUserTableFromCDCSDKStream(
+      const RemoveUserTableFromCDCSDKStreamRequestPB* req,
+      RemoveUserTableFromCDCSDKStreamResponsePB* resp, rpc::RpcContext* rpc);
+
+  Status VerifyTabletEntriesInCDCStateForCDCSDKStream(const xrepl::StreamId& stream_id);
+
+  Status DisableDynamicTableAdditionOnCDCSDKStream(
+      const DisableDynamicTableAdditionOnCDCSDKStreamRequestPB* req,
+      DisableDynamicTableAdditionOnCDCSDKStreamResponsePB* resp, rpc::RpcContext* rpc);
 
   // Query if Bootstrapping is required for a CDC stream (e.g. Are we missing logs).
   Status IsBootstrapRequired(

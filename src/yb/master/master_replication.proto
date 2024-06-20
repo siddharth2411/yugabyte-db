@@ -42,6 +42,10 @@ message CDCStreamInfoPB {
   map<string, PgReplicaIdentity> replica_identity_map = 10;
 
   optional string cdcsdk_ysql_replication_slot_plugin_name = 11;
+
+  // This field controls if dynamic tables should automatically be added to the CDC stream or not.
+  // If set to true, dynamic table wont get added to the CDC stream.
+  optional bool cdcsdk_disable_dynamic_table_addition = 12;
 }
 
 message ValidateReplicationInfoRequestPB {
@@ -755,13 +759,20 @@ message GetUniverseReplicationInfoResponsePB {
   repeated DbScopedInfoPB db_scoped_infos = 5;
 }
 
-message RemoveTableFromCDCSDKStreamRequestPB {
+message RemoveUserTableFromCDCSDKStreamRequestPB {
   optional string stream_id = 1;
   optional string table_id = 2;
 }
 
-message RemoveTableFromCDCSDKStreamResponsePB {
-  // The error, if an error occurred with this request.
+message RemoveUserTableFromCDCSDKStreamResponsePB {
+  optional MasterErrorPB error = 1;
+}
+
+message DisableDynamicTableAdditionOnCDCSDKStreamRequestPB {
+  optional string stream_id = 1;
+}
+
+message DisableDynamicTableAdditionOnCDCSDKStreamResponsePB {
   optional MasterErrorPB error = 1;
 }
 
@@ -780,8 +791,10 @@ service MasterReplication {
       returns (IsObjectPartOfXReplResponsePB);
   rpc GetCDCStream(GetCDCStreamRequestPB) returns (GetCDCStreamResponsePB);
   rpc GetCDCDBStreamInfo(GetCDCDBStreamInfoRequestPB) returns (GetCDCDBStreamInfoResponsePB);
-  rpc RemoveTableFromCDCSDKStream (RemoveTableFromCDCSDKStreamRequestPB)
-      returns (RemoveTableFromCDCSDKStreamResponsePB);
+  rpc RemoveUserTableFromCDCSDKStream (RemoveUserTableFromCDCSDKStreamRequestPB)
+      returns (RemoveUserTableFromCDCSDKStreamResponsePB);
+  rpc DisableDynamicTableAdditionOnCDCSDKStream (DisableDynamicTableAdditionOnCDCSDKStreamRequestPB)
+      returns (DisableDynamicTableAdditionOnCDCSDKStreamResponsePB);
   rpc UpdateCDCStream (UpdateCDCStreamRequestPB) returns (UpdateCDCStreamResponsePB);
   rpc IsBootstrapRequired (IsBootstrapRequiredRequestPB) returns (IsBootstrapRequiredResponsePB);
   rpc GetUDTypeMetadata(GetUDTypeMetadataRequestPB) returns (GetUDTypeMetadataResponsePB);
