@@ -2747,7 +2747,7 @@ Result<string> CDCSDKYsqlTest::GetUniverseId(PostgresMiniCluster* cluster) {
 
   void CDCSDKYsqlTest::CheckTabletsInCDCStateTable(
       const std::unordered_set<TabletId> expected_tablet_ids, client::YBClient* client,
-      const xrepl::StreamId& stream_id) {
+      const xrepl::StreamId& stream_id, bool ignore_slot_cdc_state_entry) {
     CDCStateTable cdc_state_table(test_client());
     Status s;
     auto table_range = ASSERT_RESULT(cdc_state_table.GetTableRange({}, &s));
@@ -2762,6 +2762,11 @@ Result<string> CDCSDKYsqlTest::GetUniverseId(PostgresMiniCluster* cluster) {
             if (stream_id && row.key.stream_id != stream_id) {
               continue;
             }
+
+            if (row.key.tablet_id == kCDCSDKSlotEntryTabletId && ignore_slot_cdc_state_entry) {
+              continue;
+            }
+
             seen_tablet_ids.insert(row.key.tablet_id);
             seen_rows += 1;
           }
@@ -4499,6 +4504,19 @@ Result<string> CDCSDKYsqlTest::GetUniverseId(PostgresMiniCluster* cluster) {
       oss << pub_refresh_times[i];
     }
     return oss.str();
+  }
+
+  Status CDCSDKYsqlTest::RemoveNonUserTablesFromCDCSDKStream(const xrepl::StreamId& stream_id) {
+    string tool_path = GetToolPath("../bin", "yb-admin");
+    vector<string> argv;
+    argv.push_back(tool_path);
+    argv.push_back("--master_addresses");
+    argv.push_back(AsString(test_cluster_.mini_cluster_->GetMasterAddresses()));
+    argv.push_back("remove_non_user_tables_from_change_data_stream");
+    argv.push_back(stream_id.ToString());
+    RETURN_NOT_OK(Subprocess::Call(argv));
+
+    return Status::OK();
   }
 
 } // namespace cdc

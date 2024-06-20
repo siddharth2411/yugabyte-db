@@ -117,6 +117,7 @@ DECLARE_uint64(TEST_cdcsdk_publication_list_refresh_interval_micros);
 DECLARE_bool(cdcsdk_enable_dynamic_table_support);
 DECLARE_bool(enable_cdcsdk_setting_get_changes_response_byte_limit);
 DECLARE_uint64(cdcsdk_vwal_getchanges_resp_max_size_bytes);
+DECLARE_bool(TEST_cdcsdk_add_all_table_to_stream);
 
 namespace yb {
 
@@ -617,9 +618,9 @@ class CDCSDKYsqlTest : public CDCSDKTestBase {
       const int expected_num_tablets = 2);
 
   void CheckTabletsInCDCStateTable(
-      const std::unordered_set<TabletId> expected_tablet_ids,
-      client::YBClient* client,
-      const xrepl::StreamId& stream_id = xrepl::StreamId::Nil());
+      const std::unordered_set<TabletId> expected_tablet_ids, client::YBClient* client,
+      const xrepl::StreamId& stream_id = xrepl::StreamId::Nil(),
+      bool ignore_slot_cdc_state_entry = false);
 
   Result<std::vector<TableId>> GetCDCStreamTableIds(const xrepl::StreamId& stream_id);
 
@@ -781,6 +782,10 @@ class CDCSDKYsqlTest : public CDCSDKTestBase {
   std::string GetPubRefreshTimesString(vector<uint64_t> pub_refresh_times);
 
   void TestNonUserTableShouldNotGetAddedToCDCStream (bool create_consistent_snapshot_stream);
+
+  void TestNonUserTableRemovalFromCDCStream(const bool use_consistent_snapshot_stream);
+
+  Status RemoveNonUserTablesFromCDCSDKStream(const xrepl::StreamId& stream_id);
 };
 
 }  // namespace cdc

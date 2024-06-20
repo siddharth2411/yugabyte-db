@@ -8619,5 +8619,153 @@ TEST_F(CDCSDKYsqlTest, TestNonUserTableShouldNotGetAddedToConsistentSnapshotCDCS
   TestNonUserTableShouldNotGetAddedToCDCStream(/* create_consistent_snapshot_stream */ true);
 }
 
+void CDCSDKYsqlTest::TestNonUserTableRemovalFromCDCStream(const bool use_consistent_snapshot_stream) {
+  ANNOTATE_UNPROTECTED_WRITE(FLAGS_yb_enable_cdc_consistent_snapshot_streams) =
+      use_consistent_snapshot_stream;
+  ANNOTATE_UNPROTECTED_WRITE(FLAGS_update_min_cdc_indices_interval_secs) = 1;
+  ANNOTATE_UNPROTECTED_WRITE(FLAGS_TEST_cdcsdk_add_all_table_to_stream) = true;
+  // Setup cluster.
+  ASSERT_OK(SetUpWithParams(
+      1, 1, false /* colocated */, false /* cdc_populate_safepoint_record */,
+      true /* set_pgsql_proxy_bind_address */));
+  auto conn = ASSERT_RESULT(test_cluster_.ConnectToDB(kNamespaceName));
+  const auto tableName1 = "test_table_1";
+  const auto tableName2 = "test_table_2";
+  ASSERT_OK(conn.ExecuteFormat(
+      "CREATE TABLE $0(key int PRIMARY KEY, a int, b int) SPLIT INTO 3 TABLETS;", tableName1));
+  auto table1 = ASSERT_RESULT(GetTable(&test_cluster_, kNamespaceName, tableName1));
+  google::protobuf::RepeatedPtrField<master::TabletLocationsPB> table1_tablets;
+
+  // Wait for a second for the table to be created and the tablets to be RUNNING
+  // Only after this will the tablets of this table get entries in cdc_state table
+  SleepFor(MonoDelta::FromSeconds(1 * kTimeMultiplier));
+  ASSERT_OK(
+      test_client()->GetTablets(table1, 0, &table1_tablets, /* partition_list_version=*/nullptr));
+  ASSERT_EQ(table1_tablets.size(), 3);
+
+  // Create non-user tables like index, mat views BEFORE the stream has been created
+  ASSERT_OK(conn.ExecuteFormat("CREATE INDEX $0_idx1 ON $0(a ASC)", tableName1));
+  auto idx1 = ASSERT_RESULT(GetTable(&test_cluster_, kNamespaceName, Format("$0_idx1", tableName1)));
+  google::protobuf::RepeatedPtrField<master::TabletLocationsPB> idx1_tablets;
+  ASSERT_OK(
+      test_client()->GetTablets(idx1, 0, &idx1_tablets, /* partition_list_version=*/nullptr));
+  ASSERT_EQ(idx1_tablets.size(), 1);
+  ASSERT_OK(
+      conn.ExecuteFormat("CREATE MATERIALIZED VIEW $0_mv1 AS SELECT COUNT(*) FROM $0", tableName1));
+  auto matview1 =
+      ASSERT_RESULT(GetTable(&test_cluster_, kNamespaceName, Format("$0_mv1", tableName1)));
+  google::protobuf::RepeatedPtrField<master::TabletLocationsPB> matview1_tablets;
+  ASSERT_OK(test_client()->GetTablets(
+      matview1, 0, &matview1_tablets, /* partition_list_version=*/nullptr));
+  ASSERT_EQ(matview1_tablets.size(), 1);
+
+  xrepl::StreamId stream_id = use_consistent_snapshot_stream
+                                  ? ASSERT_RESULT(CreateConsistentSnapshotStream())
+                                  : ASSERT_RESULT(CreateDBStream(CDCCheckpointType::EXPLICIT));
+
+  // // Create non-user tables AFTER the stream has been created
+  ASSERT_OK(conn.ExecuteFormat("CREATE INDEX $0_idx2 ON $0(b ASC)", tableName1));
+  auto idx2 = ASSERT_RESULT(GetTable(&test_cluster_, kNamespaceName, Format("$0_idx2", tableName1)));
+  // Wait for the bg thread to complete finding out new tables added in the namespace and add
+  // them to CDC stream if relevant.
+  SleepFor(MonoDelta::FromSeconds(5 * kTimeMultiplier));
+  google::protobuf::RepeatedPtrField<master::TabletLocationsPB> idx2_tablets;
+  ASSERT_OK(test_client()->GetTablets(idx2, 0, &idx2_tablets, /* partition_list_version=*/nullptr));
+  ASSERT_EQ(idx2_tablets.size(), 1);
+
+  // Before we remove non-user tables, get the current stream metadata as well as cdc state table entries.
+  std::unordered_set<TableId> expected_tables = {
+      table1.table_id(), idx1.table_id(), matview1.table_id(), idx2.table_id()};
+
+  VerifyTablesInStreamMetadata(
+      stream_id, expected_tables,
+      "Waiting for GetDBStreamInfo after adding an index creation after stream creation");
+
+  std::unordered_set<TabletId> expected_tablets;
+  for (const auto& tablet : table1_tablets) {
+    expected_tablets.insert(tablet.tablet_id());
+  }
+  for (const auto& tablet : idx1_tablets) {
+    expected_tablets.insert(tablet.tablet_id());
+  }
+
+  for (const auto& tablet : matview1_tablets) {
+    expected_tablets.insert(tablet.tablet_id());
+  }
+
+  for (const auto& tablet : idx2_tablets) {
+    expected_tablets.insert(tablet.tablet_id());
+  }
+
+  CheckTabletsInCDCStateTable(
+      expected_tablets, test_client(), stream_id, /* ignore_slot_cdc_state_entry */ true);
+
+  // Remove non-user tables from stream using yb-admin command. This command will remove idx1, idx2, matview1 from stream
+  // metadata as well as update its corresponding state table tablet entries with checkpoint as max.
+  ASSERT_OK(RemoveNonUserTablesFromCDCSDKStream(stream_id));
+  SleepFor(MonoDelta::FromSeconds(5 * kTimeMultiplier));
+
+  // Stream metadata should no longer contain the removed table i.e. table_1.
+  expected_tables.erase(idx1.table_id());
+  expected_tables.erase(idx2.table_id());
+  expected_tables.erase(matview1.table_id());
+  VerifyTablesInStreamMetadata(
+      stream_id, expected_tables,
+      "Waiting for GetDBStreamInfo after non-user table removal from CDC stream.");
+
+  // Since checkpoint will be set to max for table_1's tablet entries, wait for
+  // UpdatePeersAndMetrics to delete those entries.
+  SleepFor(MonoDelta::FromSeconds(5 * kTimeMultiplier));
+
+  // Verify tablets of table_1 are removed from cdc_state table.
+  expected_tablets.clear();
+  for (const auto& tablet : table1_tablets) {
+    expected_tablets.insert(tablet.tablet_id());
+  }
+
+  CheckTabletsInCDCStateTable(
+      expected_tablets, test_client(), stream_id, /* ignore_slot_cdc_state_entry */ true);
+
+  // Even on a master restart, non-user tables should not get added to the stream.
+  auto leader_master = ASSERT_RESULT(test_cluster_.mini_cluster_->GetLeaderMiniMaster());
+  ASSERT_OK(leader_master->Restart());
+  LOG(INFO) << "Master Restarted";
+  SleepFor(MonoDelta::FromSeconds(5));
+
+  // Create a dynamic table and create non user tables on this dynamic table.
+  ASSERT_OK(conn.ExecuteFormat(
+      "CREATE TABLE $0(key int PRIMARY KEY, a int, b int) SPLIT INTO 3 TABLETS;", tableName2));
+  auto table2 = ASSERT_RESULT(GetTable(&test_cluster_, kNamespaceName, tableName2));
+  google::protobuf::RepeatedPtrField<master::TabletLocationsPB> table2_tablets;
+
+  // Wait for a second for the table to be created and the tablets to be RUNNING
+  // Only after this will the tablets of this table get entries in cdc_state table
+  SleepFor(MonoDelta::FromSeconds(1 * kTimeMultiplier));
+  ASSERT_OK(
+      test_client()->GetTablets(table2, 0, &table2_tablets, /* partition_list_version=*/nullptr));
+  ASSERT_EQ(table2_tablets.size(), 3);
+
+  expected_tables.insert(table2.table_id());
+
+  VerifyTablesInStreamMetadata(
+      stream_id, expected_tables,
+      "Waiting for GetDBStreamInfo after creating table on master restart.");
+
+  for (const auto& tablet : table2_tablets) {
+    expected_tablets.insert(tablet.tablet_id());
+  }
+
+  CheckTabletsInCDCStateTable(
+      expected_tablets, test_client(), stream_id, /* ignore_slot_cdc_state_entry */ true);
+}
+
+TEST_F(CDCSDKYsqlTest, TestNonUserTableRemovalFromNonConsistentSnapshotCDCStream) {
+  TestNonUserTableRemovalFromCDCStream(/* use_consistent_snapshot_stream */ false);
+}
+
+TEST_F(CDCSDKYsqlTest, TestNonUserTableRemovalFromConsistentSnapshotCDCStream) {
+  TestNonUserTableRemovalFromCDCStream(/* use_consistent_snapshot_stream */ true);
+}
+
 }  // namespace cdc
 }  // namespace yb

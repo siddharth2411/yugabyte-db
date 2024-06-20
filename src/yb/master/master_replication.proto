@@ -755,6 +755,14 @@ message GetUniverseReplicationInfoResponsePB {
   repeated DbScopedInfoPB db_scoped_infos = 5;
 }
 
+message RemoveNonUserTablesFromCDCSDKStreamRequestPB {
+  optional string stream_id = 1;
+}
+
+message RemoveNonUserTablesFromCDCSDKStreamResponsePB {
+  optional MasterErrorPB error = 1;
+}
+
 service MasterReplication {
   option (yb.rpc.custom_service_name) = "yb.master.MasterService";
 
@@ -770,6 +778,8 @@ service MasterReplication {
       returns (IsObjectPartOfXReplResponsePB);
   rpc GetCDCStream(GetCDCStreamRequestPB) returns (GetCDCStreamResponsePB);
   rpc GetCDCDBStreamInfo(GetCDCDBStreamInfoRequestPB) returns (GetCDCDBStreamInfoResponsePB);
+  rpc RemoveNonUserTablesFromCDCSDKStream (RemoveNonUserTablesFromCDCSDKStreamRequestPB)
+      returns (RemoveNonUserTablesFromCDCSDKStreamResponsePB);
   rpc UpdateCDCStream (UpdateCDCStreamRequestPB) returns (UpdateCDCStreamResponsePB);
   rpc IsBootstrapRequired (IsBootstrapRequiredRequestPB) returns (IsBootstrapRequiredResponsePB);
   rpc GetUDTypeMetadata(GetUDTypeMetadataRequestPB) returns (GetUDTypeMetadataResponsePB);

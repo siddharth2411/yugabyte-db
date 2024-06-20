@@ -1945,6 +1945,20 @@ Status ysql_backfill_change_data_stream_with_replication_slot_action(
   return Status::OK();
 }
 
+const auto remove_non_user_tables_from_change_data_stream_args = "<stream_id>";
+Status remove_non_user_tables_from_change_data_stream_action(
+    const ClusterAdminCli::CLIArguments& args, ClusterAdminClient* client) {
+  if (args.size() != 1) {
+    return ClusterAdminCli::kInvalidArguments;
+  }
+
+  const string stream_id = args[0];
+  string msg = Format("Unable to remove non user tables $0 from CDC stream $0", stream_id);
+
+  RETURN_NOT_OK_PREPEND(client->RemoveNonUserTablesFromCDCSDKStream(stream_id), msg);
+  return Status::OK();
+}
+
 const auto setup_universe_replication_args =
     "<producer_universe_uuid> <producer_master_addresses> "
     "<comma_separated_list_of_table_ids> [<comma_separated_list_of_producer_bootstrap_ids>] "
@@ -2731,6 +2745,7 @@ void ClusterAdminCli::RegisterCommandHandlers() {
   REGISTER_COMMAND(list_change_data_streams);
   REGISTER_COMMAND(get_change_data_stream_info);
   REGISTER_COMMAND(ysql_backfill_change_data_stream_with_replication_slot);
+  REGISTER_COMMAND(remove_non_user_tables_from_change_data_stream);
   // xCluster Source commands
   REGISTER_COMMAND(bootstrap_cdc_producer);
   REGISTER_COMMAND(list_cdc_streams);

@@ -3792,6 +3792,27 @@ Status ClusterAdminClient::YsqlBackfillReplicationSlotNameToCDCSDKStream(
   return Status::OK();
 }
 
+Status ClusterAdminClient::RemoveNonUserTablesFromCDCSDKStream(const std::string& stream_id) {
+  master::RemoveNonUserTablesFromCDCSDKStreamRequestPB req;
+  master::RemoveNonUserTablesFromCDCSDKStreamResponsePB resp;
+
+  req.set_stream_id(stream_id);
+
+  RpcController rpc;
+  // Set a higher timeout since this RPC verifes that each cdc state table entry for the stream
+  // belongs to one of the tables in the stream metadata.
+  rpc.set_timeout(MonoDelta::FromSeconds(std::max(timeout_.ToSeconds(), 120.0)));
+  RETURN_NOT_OK(master_replication_proxy_->RemoveNonUserTablesFromCDCSDKStream(req, &resp, &rpc));
+  if (resp.has_error()) {
+    cout << "Error removing non-user tables from CDC stream: " << resp.error().status().message()
+         << endl;
+    return StatusFromPB(resp.error().status());
+  }
+
+  cout << "Succesfully removed non-user tables from CDC stream: " << stream_id << "\n";
+  return Status::OK();
+}
+
 Status ClusterAdminClient::WaitForSetupUniverseReplicationToFinish(
     const string& replication_group_id) {
   master::IsSetupUniverseReplicationDoneRequestPB req;
