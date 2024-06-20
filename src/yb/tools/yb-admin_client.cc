@@ -3792,24 +3792,46 @@ Status ClusterAdminClient::YsqlBackfillReplicationSlotNameToCDCSDKStream(
   return Status::OK();
 }
 
-Status ClusterAdminClient::RemoveTableFromCDCSDKStream(
+Status ClusterAdminClient::DisableDynamicTableAdditionOnCDCSDKStream(const std::string& stream_id) {
+  master::DisableDynamicTableAdditionOnCDCSDKStreamRequestPB req;
+  master::DisableDynamicTableAdditionOnCDCSDKStreamResponsePB resp;
+
+  req.set_stream_id(stream_id);
+
+  RpcController rpc;
+  rpc.set_timeout(timeout_);
+  RETURN_NOT_OK(master_replication_proxy_->DisableDynamicTableAdditionOnCDCSDKStream(req, &resp, &rpc));
+
+  if (resp.has_error()) {
+    cout << "Error disabling dynamic table addition from CDC stream: " << resp.error().status().message() << endl;
+    return StatusFromPB(resp.error().status());
+  }
+
+  cout << "Succesfully disabled dynamic table addition on CDC stream: " << stream_id << "\n";
+
+  return Status::OK();
+}
+
+Status ClusterAdminClient::RemoveUserTableFromCDCSDKStream(
     const std::string& stream_id, const std::string& table_id) {
-  master::RemoveTableFromCDCSDKStreamRequestPB req;
-  master::RemoveTableFromCDCSDKStreamResponsePB resp;
+  master::RemoveUserTableFromCDCSDKStreamRequestPB req;
+  master::RemoveUserTableFromCDCSDKStreamResponsePB resp;
 
   req.set_stream_id(stream_id);
   req.set_table_id(table_id);
 
   RpcController rpc;
-  rpc.set_timeout(timeout_);
-  RETURN_NOT_OK(master_replication_proxy_->RemoveTableFromCDCSDKStream(req, &resp, &rpc));
+  // Set a higher timeout since this RPC verifes that each cdc state table entry for the stream
+  // belongs to one of the tables in the stream metadata.
+  rpc.set_timeout(MonoDelta::FromSeconds(std::max(timeout_.ToSeconds(), 120.0)));
+  RETURN_NOT_OK(master_replication_proxy_->RemoveUserTableFromCDCSDKStream(req, &resp, &rpc));
 
   if (resp.has_error()) {
-    cout << "Error removing table from CDC stream: " << resp.error().status().message() << endl;
+    cout << "Error removing user table from CDC stream: " << resp.error().status().message() << endl;
     return StatusFromPB(resp.error().status());
   }
 
-  cout << "Succesfully removed table: " << table_id << " from CDC stream: " << stream_id << "\n";
+  cout << "Succesfully removed user table: " << table_id << " from CDC stream: " << stream_id << "\n";
 
   return Status::OK();
 }
