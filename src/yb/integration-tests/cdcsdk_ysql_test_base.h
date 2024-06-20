@@ -617,9 +617,9 @@ class CDCSDKYsqlTest : public CDCSDKTestBase {
       const int expected_num_tablets = 2);
 
   void CheckTabletsInCDCStateTable(
-      const std::unordered_set<TabletId> expected_tablet_ids,
-      client::YBClient* client,
-      const xrepl::StreamId& stream_id = xrepl::StreamId::Nil());
+      const std::unordered_set<TabletId> expected_tablet_ids, client::YBClient* client,
+      const xrepl::StreamId& stream_id = xrepl::StreamId::Nil(),
+      bool ignore_slot_cdc_state_entry = false);
 
   Result<std::vector<TableId>> GetCDCStreamTableIds(const xrepl::StreamId& stream_id);
 
@@ -782,9 +782,13 @@ class CDCSDKYsqlTest : public CDCSDKTestBase {
 
   void TestNonUserTableShouldNotGetAddedToCDCStream (bool create_consistent_snapshot_stream);
 
-  Status RemoveTableFromCDCSDKStream(const xrepl::StreamId& stream_id, const TableId& table_id);
+  Status DisableDynamicTableAdditionOnCDCSDKStream(const xrepl::StreamId& stream_id);
 
-  void TestManualTableRemovalFromCDCStream(bool use_consistent_snapshot_stream);
+  void TestDisableOfDynamicTableAdditionOnCDCStream(const bool use_consistent_snapshot_stream);
+
+  Status RemoveUserTableFromCDCSDKStream(const xrepl::StreamId& stream_id, const TableId& table_id);
+
+  void TestUserTableRemovalFromCDCStream(const bool use_consistent_snapshot_stream);
 };
 
 }  // namespace cdc

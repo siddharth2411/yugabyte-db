@@ -2747,7 +2747,7 @@ Result<string> CDCSDKYsqlTest::GetUniverseId(PostgresMiniCluster* cluster) {
 
   void CDCSDKYsqlTest::CheckTabletsInCDCStateTable(
       const std::unordered_set<TabletId> expected_tablet_ids, client::YBClient* client,
-      const xrepl::StreamId& stream_id) {
+      const xrepl::StreamId& stream_id, bool ignore_slot_cdc_state_entry) {
     CDCStateTable cdc_state_table(test_client());
     Status s;
     auto table_range = ASSERT_RESULT(cdc_state_table.GetTableRange({}, &s));
@@ -2762,6 +2762,11 @@ Result<string> CDCSDKYsqlTest::GetUniverseId(PostgresMiniCluster* cluster) {
             if (stream_id && row.key.stream_id != stream_id) {
               continue;
             }
+
+            if (row.key.tablet_id == kCDCSDKSlotEntryTabletId && ignore_slot_cdc_state_entry) {
+              continue;
+            }
+
             seen_tablet_ids.insert(row.key.tablet_id);
             seen_rows += 1;
           }
@@ -4501,14 +4506,29 @@ Result<string> CDCSDKYsqlTest::GetUniverseId(PostgresMiniCluster* cluster) {
     return oss.str();
   }
 
-  Status CDCSDKYsqlTest::RemoveTableFromCDCSDKStream(
+  Status CDCSDKYsqlTest::DisableDynamicTableAdditionOnCDCSDKStream(
+      const xrepl::StreamId& stream_id) {
+    string tool_path = GetToolPath("../bin", "yb-admin");
+    vector<string> argv;
+    argv.push_back(tool_path);
+    argv.push_back("--master_addresses");
+    argv.push_back(AsString(test_cluster_.mini_cluster_->GetMasterAddresses()));
+    argv.push_back("disable_dynamic_table_addition_on_change_data_stream");
+    argv.push_back(stream_id.ToString());
+
+    RETURN_NOT_OK(Subprocess::Call(argv));
+
+    return Status::OK();
+  }
+
+  Status CDCSDKYsqlTest::RemoveUserTableFromCDCSDKStream(
       const xrepl::StreamId& stream_id, const TableId& table_id) {
     string tool_path = GetToolPath("../bin", "yb-admin");
     vector<string> argv;
     argv.push_back(tool_path);
     argv.push_back("--master_addresses");
     argv.push_back(AsString(test_cluster_.mini_cluster_->GetMasterAddresses()));
-    argv.push_back("remove_table_from_change_data_stream");
+    argv.push_back("remove_user_table_from_change_data_stream");
     argv.push_back(stream_id.ToString());
     argv.push_back(table_id);
     RETURN_NOT_OK(Subprocess::Call(argv));
