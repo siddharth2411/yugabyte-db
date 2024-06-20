@@ -643,7 +643,8 @@ class YBClient {
       std::optional<uint64_t>* consistent_snapshot_time = nullptr,
       std::optional<CDCSDKSnapshotOption>* consistent_snapshot_option = nullptr,
       std::optional<uint64_t>* stream_creation_time = nullptr,
-      std::unordered_map<std::string, PgReplicaIdentity>* replica_identity_map = nullptr);
+      std::unordered_map<std::string, PgReplicaIdentity>* replica_identity_map = nullptr,
+      std::optional<bool>* disable_dynamic_table_addition = nullptr);
 
   Result<CDCSDKStreamInfo> GetCDCStream(
       const ReplicationSlotName& replication_slot_name,

@@ -117,10 +117,12 @@ Status StreamMetadata::GetStreamInfoFromMaster(
   std::optional<CDCSDKSnapshotOption> consistent_snapshot_option;
   std::optional<uint64> stream_creation_time;
   std::unordered_map<std::string, PgReplicaIdentity> replica_identity_map;
+  std::optional<bool> disable_dynamic_table_addition;
 
   RETURN_NOT_OK(client->GetCDCStream(
       stream_id, &namespace_id, &object_ids, &options, &transactional, &consistent_snapshot_time,
-      &consistent_snapshot_option, &stream_creation_time, &replica_identity_map));
+      &consistent_snapshot_option, &stream_creation_time, &replica_identity_map,
+      &disable_dynamic_table_addition));
 
   AddDefaultOptionsIfMissing(&options);
 
@@ -176,6 +178,7 @@ Status StreamMetadata::GetStreamInfoFromMaster(
   transactional_.store(transactional, std::memory_order_release);
   consistent_snapshot_time_.store(consistent_snapshot_time, std::memory_order_release);
   stream_creation_time_.store(stream_creation_time, std::memory_order_release);
+  disable_dynamic_table_addition_.store(disable_dynamic_table_addition, std::memory_order_release);
   consistent_snapshot_option_ = consistent_snapshot_option;
 
   if (!is_refresh) {

@@ -1555,7 +1555,8 @@ Status YBClient::GetCDCStream(
     std::optional<uint64_t>* consistent_snapshot_time,
     std::optional<CDCSDKSnapshotOption>* consistent_snapshot_option,
     std::optional<uint64_t>* stream_creation_time,
-    std::unordered_map<std::string, PgReplicaIdentity>* replica_identity_map) {
+    std::unordered_map<std::string, PgReplicaIdentity>* replica_identity_map,
+    std::optional<bool>* disable_dynamic_table_addition) {
 
   // Setting up request.
   GetCDCStreamRequestPB req;
@@ -1602,6 +1603,10 @@ Status YBClient::GetCDCStream(
   }
   if (stream_creation_time && resp.stream().has_stream_creation_time()) {
     *stream_creation_time = resp.stream().stream_creation_time();
+  }
+
+  if (disable_dynamic_table_addition && resp.stream().has_cdcsdk_disable_dynamic_table_addition()) {
+    *disable_dynamic_table_addition = resp.stream().cdcsdk_disable_dynamic_table_addition();
   }
 
   return Status::OK();
