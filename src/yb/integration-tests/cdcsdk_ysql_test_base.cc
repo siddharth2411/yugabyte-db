@@ -4538,5 +4538,19 @@ Result<string> CDCSDKYsqlTest::GetUniverseId(PostgresMiniCluster* cluster) {
     return Status::OK();
   }
 
+  Status CDCSDKYsqlTest::ValidateCDCStateEntriesForCDCSDKStream(const xrepl::StreamId& stream_id) {
+    string tool_path = GetToolPath("../bin", "yb-admin");
+    vector<string> argv;
+    argv.push_back(tool_path);
+    argv.push_back("--master_addresses");
+    argv.push_back(AsString(test_cluster_.mini_cluster_->GetMasterAddresses()));
+    argv.push_back("validate_cdc_state_table_entries_on_change_data_stream");
+    argv.push_back(stream_id.ToString());
+
+    RETURN_NOT_OK(Subprocess::Call(argv));
+
+    return Status::OK();
+  }
+
 } // namespace cdc
 } // namespace yb

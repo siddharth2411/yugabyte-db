@@ -117,6 +117,7 @@ DECLARE_uint64(TEST_cdcsdk_publication_list_refresh_interval_micros);
 DECLARE_bool(cdcsdk_enable_dynamic_table_support);
 DECLARE_bool(enable_cdcsdk_setting_get_changes_response_byte_limit);
 DECLARE_uint64(cdcsdk_vwal_getchanges_resp_max_size_bytes);
+DECLARE_bool(TEST_skip_updating_cdc_state_entries_on_table_removal);
 
 namespace yb {
 
@@ -784,11 +785,15 @@ class CDCSDKYsqlTest : public CDCSDKTestBase {
 
   Status DisableDynamicTableAdditionOnCDCSDKStream(const xrepl::StreamId& stream_id);
 
-  void TestDisableOfDynamicTableAdditionOnCDCStream(const bool use_consistent_snapshot_stream);
+  void TestDisableOfDynamicTableAdditionOnCDCStream(bool use_consistent_snapshot_stream);
 
   Status RemoveUserTableFromCDCSDKStream(const xrepl::StreamId& stream_id, const TableId& table_id);
 
-  void TestUserTableRemovalFromCDCStream(const bool use_consistent_snapshot_stream);
+  void TestUserTableRemovalFromCDCStream(bool use_consistent_snapshot_stream);
+
+  Status ValidateCDCStateEntriesForCDCSDKStream(const xrepl::StreamId& stream_id);
+
+  void TestValidationOfCDCStateEntriesAfterUserTableRemoval(bool use_consistent_snapshot_stream);
 };
 
 }  // namespace cdc

@@ -8633,7 +8633,7 @@ TEST_F(CDCSDKYsqlTest, TestTablesWithEnumArrayColumnShouldNotGetAddedToStream) {
 }
 
 void CDCSDKYsqlTest::TestDisableOfDynamicTableAdditionOnCDCStream(
-    const bool use_consistent_snapshot_stream) {
+    bool use_consistent_snapshot_stream) {
   ANNOTATE_UNPROTECTED_WRITE(FLAGS_yb_enable_cdc_consistent_snapshot_streams) =
       use_consistent_snapshot_stream;
   ANNOTATE_UNPROTECTED_WRITE(FLAGS_catalog_manager_bg_task_wait_ms) = 100;
@@ -8776,12 +8776,12 @@ TEST_F(CDCSDKYsqlTest, TestDisableOfDynamicTableAdditionOnConsistentSnapshotStre
       /* use_consistent_snapshot_stream */ true);
 }
 
-void CDCSDKYsqlTest::TestUserTableRemovalFromCDCStream(const bool use_consistent_snapshot_stream) {
+void CDCSDKYsqlTest::TestUserTableRemovalFromCDCStream(bool use_consistent_snapshot_stream) {
   ANNOTATE_UNPROTECTED_WRITE(FLAGS_yb_enable_cdc_consistent_snapshot_streams) =
       use_consistent_snapshot_stream;
   ANNOTATE_UNPROTECTED_WRITE(FLAGS_update_min_cdc_indices_interval_secs) = 1;
   // Setup cluster.
-  ASSERT_OK(SetUpWithParams(3, 3, false));
+  ASSERT_OK(SetUpWithParams(3, 1, false));
 
   const vector<string> table_list_suffix = {"_1", "_2", "_3"};
   const int kNumTables = 3;
@@ -8853,6 +8853,38 @@ void CDCSDKYsqlTest::TestUserTableRemovalFromCDCStream(const bool use_consistent
 
   CheckTabletsInCDCStateTable(
       expected_tablets, test_client(), stream_id, /* ignore_slot_cdc_state_entry */ true);
+
+  ASSERT_OK(WaitForFlushTables(
+      {table[0].table_id()}, /* add_indexes = */ false, /* timeout_secs = */ 30,
+      /* is_compaction = */ false));
+
+  // Split table_1's tablet.
+  WaitUntilSplitIsSuccesful(tablets[0].Get(0).tablet_id(), table[0], 2);
+  google::protobuf::RepeatedPtrField<master::TabletLocationsPB> table1_tablets_after_split;
+  ASSERT_OK(test_client()->GetTablets(
+      table[0], 0, &table1_tablets_after_split, /* partition_list_version =*/nullptr));
+  ASSERT_EQ(table1_tablets_after_split.size(), 2);
+
+  // Wait for sometime so that tablet split codepath has completed adding new cdc state entries.
+  SleepFor(MonoDelta::FromSeconds(3 * kTimeMultiplier));
+
+  // Children tablets of table_1 shouldnt get added to cdc state table since the table no longer
+  // exists in stream metadata.
+  CheckTabletsInCDCStateTable(
+      expected_tablets, test_client(), stream_id, /* ignore_slot_cdc_state_entry */ true);
+
+  auto leader_master = ASSERT_RESULT(test_cluster_.mini_cluster_->GetLeaderMiniMaster());
+  ASSERT_OK(leader_master->Restart());
+  LOG(INFO) << "Master Restarted";
+
+  // Even after a restart, we shoudnt see table_1 in stream metadata as well as cdc state table
+  // entries shouldnt contain any of the table_1 tablets.
+  VerifyTablesInStreamMetadata(
+      stream_id, expected_tables_after_table_removal,
+      "Waiting for GetBStreamInfo after master restart.");
+
+  CheckTabletsInCDCStateTable(
+      expected_tablets, test_client(), stream_id, /* ignore_slot_cdc_state_entry */ true);
 }
 
 TEST_F(CDCSDKYsqlTest, TestUserTableRemovalFromNonConsistentSnapshotCDCStream) {
@@ -8861,6 +8893,108 @@ TEST_F(CDCSDKYsqlTest, TestUserTableRemovalFromNonConsistentSnapshotCDCStream) {
 
 TEST_F(CDCSDKYsqlTest, TestUserTableRemovalFromConsistentSnapshotCDCStream) {
   TestUserTableRemovalFromCDCStream(/* use_consistent_snapshot_stream */ true);
+}
+
+void CDCSDKYsqlTest::TestValidationOfCDCStateEntriesAfterUserTableRemoval(bool use_consistent_snapshot_stream) {
+  ANNOTATE_UNPROTECTED_WRITE(FLAGS_yb_enable_cdc_consistent_snapshot_streams) =
+      use_consistent_snapshot_stream;
+  ANNOTATE_UNPROTECTED_WRITE(FLAGS_update_min_cdc_indices_interval_secs) = 1;
+  ANNOTATE_UNPROTECTED_WRITE(FLAGS_TEST_skip_updating_cdc_state_entries_on_table_removal) = true;
+  // Setup cluster.
+  ASSERT_OK(SetUpWithParams(3, 3, false));
+
+  const vector<string> table_list_suffix = {"_1", "_2", "_3"};
+  const int kNumTables = 3;
+  vector<YBTableName> table(kNumTables);
+  int idx = 0;
+  vector<google::protobuf::RepeatedPtrField<master::TabletLocationsPB>> tablets(kNumTables);
+
+  while (idx < kNumTables) {
+    table[idx] = ASSERT_RESULT(CreateTable(
+        &test_cluster_, kNamespaceName, kTableName, 3, true, false, 0, true,
+        table_list_suffix[idx]));
+    ASSERT_OK(test_client()->GetTablets(
+        table[idx], 0, &tablets[idx], /* partition_list_version = */ nullptr));
+    ASSERT_OK(WriteEnumsRows(
+        0 /* start */, 100 /* end */, &test_cluster_, table_list_suffix[idx], kNamespaceName,
+        kTableName));
+    idx += 1;
+  }
+
+  auto stream_id = use_consistent_snapshot_stream
+                       ? ASSERT_RESULT(CreateConsistentSnapshotStream())
+                       : ASSERT_RESULT(CreateDBStream(CDCCheckpointType::EXPLICIT));
+
+  // Before we remove a table, get the initial stream metadata as well as cdc state table entries.
+  std::unordered_set<TableId> expected_tables;
+  for (const auto& table_entry : table) {
+    expected_tables.insert(table_entry.table_id());
+  }
+
+  VerifyTablesInStreamMetadata(
+      stream_id, expected_tables, "Waiting for GetDBStreamInfo after stream creation");
+
+  std::unordered_set<TabletId> expected_tablets;
+  for (const auto& tablets_entries : tablets) {
+    for (const auto& tablet : tablets_entries) {
+      expected_tablets.insert(tablet.tablet_id());
+    }
+  }
+
+  CheckTabletsInCDCStateTable(
+      expected_tablets, test_client(), stream_id, /* ignore_slot_cdc_state_entry */ true);
+
+  // Disable dynamic table addition on stream via the yb-admin command.
+  ASSERT_OK(DisableDynamicTableAdditionOnCDCSDKStream(stream_id));
+
+  // Remove table_1 from stream using yb-admin command. This command will remove table from stream
+  // metadata but skip updating cdc state entries because the test flag
+  // skip_updating_cdc_state_entries_on_table_removal is set.
+  ASSERT_OK(RemoveUserTableFromCDCSDKStream(stream_id, table[0].table_id()));
+  SleepFor(MonoDelta::FromSeconds(5 * kTimeMultiplier));
+
+  // Stream metadata should no longer contain the removed table i.e. table_1.
+  expected_tables.erase(table[0].table_id());
+  std::unordered_set<std::string> expected_tables_after_table_removal = expected_tables;
+  VerifyTablesInStreamMetadata(
+      stream_id, expected_tables_after_table_removal,
+      "Waiting for GetDBStreamInfo after table removal from CDC stream.");
+
+  // Verify that cdc state table still contains entries for the table that was removed.
+  CheckTabletsInCDCStateTable(
+      expected_tablets, test_client(), stream_id, /* ignore_slot_cdc_state_entry */ true);
+
+  // Now, validate the cdc state entries using the yb-admin command
+  // 'validate_cdc_state_table_entries_on_change_data_stream'. It will find state table entries for
+  // table_1 and update their checkpoints to max.
+  ASSERT_OK(ValidateCDCStateEntriesForCDCSDKStream(stream_id));
+
+  // Since checkpoint will be set to max for table_1's tablet entries, wait for
+  // UpdatePeersAndMetrics to delete those entries.
+  SleepFor(MonoDelta::FromSeconds(5 * kTimeMultiplier));
+
+  // Verify tablets of table_1 are removed from cdc_state table.
+  expected_tablets.clear();
+  for (int i = 1; i < idx; i++) {
+    for (const auto& tablet : tablets[i]) {
+      expected_tablets.insert(tablet.tablet_id());
+    }
+  }
+
+  CheckTabletsInCDCStateTable(
+      expected_tablets, test_client(), stream_id, /* ignore_slot_cdc_state_entry */ true);
+}
+
+TEST_F(
+    CDCSDKYsqlTest,
+    TestValidationOfCDCStateEntriesAfterUserTableRemovalOnNonConsistentSnapshotStream) {
+  TestValidationOfCDCStateEntriesAfterUserTableRemoval(/* use_consistent_snapshot_stream */ false);
+}
+
+TEST_F(
+    CDCSDKYsqlTest,
+    TestValidationOfCDCStateEntriesAfterUserTableRemovalOnConsistentSnapshotStream) {
+  TestValidationOfCDCStateEntriesAfterUserTableRemoval(/* use_consistent_snapshot_stream */ true);
 }
 
 }  // namespace cdc
