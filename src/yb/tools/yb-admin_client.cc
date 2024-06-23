@@ -3840,6 +3840,31 @@ Status ClusterAdminClient::RemoveUserTableFromCDCSDKStream(
   return Status::OK();
 }
 
+Status ClusterAdminClient::ValidateCDCStateTableEntriesForCDCSDKStream(
+    const std::string& stream_id) {
+  master::ValidateCDCStateEntriesForCDCSDKStreamRequestPB req;
+  master::ValidateCDCStateEntriesForCDCSDKStreamResponsePB resp;
+
+  req.set_stream_id(stream_id);
+
+  RpcController rpc;
+  rpc.set_timeout(timeout_);
+  RETURN_NOT_OK(
+      master_replication_proxy_->ValidateCDCStateEntriesForCDCSDKStream(req, &resp, &rpc));
+
+  if (resp.has_error()) {
+    cout << "Error validating CDC state table entries on CDC stream: "
+         << resp.error().status().message() << endl;
+    return StatusFromPB(resp.error().status());
+  }
+
+  cout << "Succesfully validated CDC state table entries on CDC stream: " << stream_id << "\n";
+  cout << "Updated checkpoint for the following stream's state table entries with tablet_id: "
+       << AsString(resp.updated_tablet_entries()) << "\n";
+
+  return Status::OK();
+}
+
 Status ClusterAdminClient::WaitForSetupUniverseReplicationToFinish(
     const string& replication_group_id) {
   master::IsSetupUniverseReplicationDoneRequestPB req;

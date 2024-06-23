@@ -1974,6 +1974,20 @@ Status remove_user_table_from_change_data_stream_action(
   return Status::OK();
 }
 
+const auto validate_cdc_state_table_entries_on_change_data_stream_args = "<stream_id>";
+Status validate_cdc_state_table_entries_on_change_data_stream_action(
+    const ClusterAdminCli::CLIArguments& args, ClusterAdminClient* client) {
+  if (args.size() != 1) {
+    return ClusterAdminCli::kInvalidArguments;
+  }
+
+  const string stream_id = args[0];
+  string msg = Format("Unable to validate cdc state table entries for CDC stream $0", stream_id);
+
+  RETURN_NOT_OK_PREPEND(client->ValidateCDCStateTableEntriesForCDCSDKStream(stream_id), msg);
+  return Status::OK();
+}
+
 const auto setup_universe_replication_args =
     "<producer_universe_uuid> <producer_master_addresses> "
     "<comma_separated_list_of_table_ids> [<comma_separated_list_of_producer_bootstrap_ids>] "
@@ -2762,6 +2776,7 @@ void ClusterAdminCli::RegisterCommandHandlers() {
   REGISTER_COMMAND(ysql_backfill_change_data_stream_with_replication_slot);
   REGISTER_COMMAND(disable_dynamic_table_addition_on_change_data_stream);
   REGISTER_COMMAND(remove_user_table_from_change_data_stream);
+  REGISTER_COMMAND(validate_cdc_state_table_entries_on_change_data_stream);
   // xCluster Source commands
   REGISTER_COMMAND(bootstrap_cdc_producer);
   REGISTER_COMMAND(list_cdc_streams);
