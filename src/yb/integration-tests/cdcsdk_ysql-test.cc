@@ -8895,7 +8895,8 @@ TEST_F(CDCSDKYsqlTest, TestUserTableRemovalFromConsistentSnapshotCDCStream) {
   TestUserTableRemovalFromCDCStream(/* use_consistent_snapshot_stream */ true);
 }
 
-void CDCSDKYsqlTest::TestValidationOfCDCStateEntriesAfterUserTableRemoval(bool use_consistent_snapshot_stream) {
+void CDCSDKYsqlTest::TestValidationOfCDCStateEntriesAfterUserTableRemoval(
+    bool use_consistent_snapshot_stream) {
   ANNOTATE_UNPROTECTED_WRITE(FLAGS_yb_enable_cdc_consistent_snapshot_streams) =
       use_consistent_snapshot_stream;
   ANNOTATE_UNPROTECTED_WRITE(FLAGS_update_min_cdc_indices_interval_secs) = 1;
