@@ -1728,7 +1728,7 @@ Status CatalogManager::FindCDCSDKStreamsForAddedTables(
           continue;
         }
 
-        if (!CanTableBeAddedToCDCSDKStream(table, schema)) {
+        if (!IsTableEligibleForCDCSDKStream(table, schema)) {
           RemoveTableFromCDCSDKUnprocessedMap(unprocessed_table_id, stream_info->namespace_id());
           continue;
         }
@@ -1865,7 +1865,7 @@ std::vector<TableInfoPtr> CatalogManager::FindAllTablesForCDCSDK(const Namespace
       }
     }
 
-    if (!CanTableBeAddedToCDCSDKStream(table_info.get(), schema)) {
+    if (!IsTableEligibleForCDCSDKStream(table_info.get(), schema)) {
       continue;
     }
 
@@ -1875,7 +1875,7 @@ std::vector<TableInfoPtr> CatalogManager::FindAllTablesForCDCSDK(const Namespace
   return tables;
 }
 
-bool CatalogManager::CanTableBeAddedToCDCSDKStream(
+bool CatalogManager::IsTableEligibleForCDCSDKStream(
     const TableInfoPtr& table_info, const Schema& schema) const {
   bool has_pk = true;
   bool has_invalid_pg_typeoid = false;
@@ -6222,7 +6222,7 @@ Status CatalogManager::RemoveUserTableFromCDCSDKStream(
 
   {
     SharedLock lock(mutex_);
-    if (!CanTableBeAddedToCDCSDKStream(table, schema)) {
+    if (!IsTableEligibleForCDCSDKStream(table, schema)) {
       RETURN_INVALID_REQUEST_STATUS(
           "Only allowed to remove user tables from CDC streams via this command.");
     }
