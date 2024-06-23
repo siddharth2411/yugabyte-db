@@ -137,6 +137,12 @@ DEFINE_test_flag(bool, fail_universe_replication_merge, false, "Causes MergeUniv
     "fail with an error.");
 
 DEFINE_test_flag(bool, xcluster_fail_setup_stream_update, false, "Fail UpdateCDCStream RPC call");
+
+DEFINE_RUNTIME_AUTO_bool(enable_cdcsdk_dynamic_tables_disable_option, kLocalPersisted, false, true,
+    "This flag needs to be set in order to disable addition of dynamic tables to CDC stream via "
+    "yb-admin command \'disable_dynamic_table_addition_on_change_data_stream\'");
+TAG_FLAG(enable_cdcsdk_dynamic_tables_disable_option, advanced);
+
 DEFINE_test_flag(bool, skip_updating_cdc_state_entries_on_table_removal, false,
     "Skip updating checkpoint for cdc state table entries to max while removing a user table from "
     "CDCSDK stream.");
@@ -2460,7 +2466,8 @@ Status CatalogManager::GetCDCStream(
     stream_info->set_stream_creation_time(stream_lock->pb.stream_creation_time());
   }
 
-  if (stream_lock->pb.has_cdcsdk_disable_dynamic_table_addition()) {
+  if (FLAGS_enable_cdcsdk_dynamic_tables_disable_option &&
+      stream_lock->pb.has_cdcsdk_disable_dynamic_table_addition()) {
     stream_info->set_cdcsdk_disable_dynamic_table_addition(
         stream_lock->pb.cdcsdk_disable_dynamic_table_addition());
   }
@@ -2598,7 +2605,8 @@ Status CatalogManager::ListCDCStreams(
       stream->set_stream_creation_time(ltm->pb.stream_creation_time());
     }
 
-    if (ltm->pb.has_cdcsdk_disable_dynamic_table_addition()) {
+    if (FLAGS_enable_cdcsdk_dynamic_tables_disable_option &&
+        ltm->pb.has_cdcsdk_disable_dynamic_table_addition()) {
       stream->set_cdcsdk_disable_dynamic_table_addition(
           ltm->pb.cdcsdk_disable_dynamic_table_addition());
     }
@@ -6100,6 +6108,12 @@ Status CatalogManager::DisableDynamicTableAdditionOnCDCSDKStream(
 
   if (!req->has_stream_id()) {
     RETURN_INVALID_REQUEST_STATUS("CDC Stream ID must be provided");
+  }
+
+  if (FLAGS_enable_cdcsdk_dynamic_tables_disable_option) {
+    RETURN_INVALID_REQUEST_STATUS(
+        "For disabling addition of dynamic tables to CDC stream, "
+        "\'enable_cdcsdk_dynamic_tables_disable_option\' gflag has to be set.");
   }
 
   auto stream_id = VERIFY_RESULT(xrepl::StreamId::FromString(req->stream_id()));

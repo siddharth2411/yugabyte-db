@@ -118,6 +118,7 @@ DECLARE_bool(cdcsdk_enable_dynamic_table_support);
 DECLARE_bool(enable_cdcsdk_setting_get_changes_response_byte_limit);
 DECLARE_uint64(cdcsdk_vwal_getchanges_resp_max_size_bytes);
 DECLARE_bool(TEST_skip_updating_cdc_state_entries_on_table_removal);
+DECLARE_bool(enable_cdcsdk_dynamic_tables_disable_option);
 
 namespace yb {
 

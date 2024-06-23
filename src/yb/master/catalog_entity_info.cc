@@ -61,6 +61,7 @@ using std::string;
 using strings::Substitute;
 
 DECLARE_int32(tserver_unresponsive_timeout_ms);
+DECLARE_bool(enable_cdcsdk_dynamic_tables_disable_option);
 
 DEFINE_RUNTIME_AUTO_bool(
     use_parent_table_id_field, kLocalPersisted, false, true,
@@ -1265,6 +1266,10 @@ CDCStreamInfo::GetReplicaIdentityMap() const {
 }
 
 bool CDCStreamInfo::IsDynamicTableAdditionDisabled() const {
+  if (!FLAGS_enable_cdcsdk_dynamic_tables_disable_option) {
+    return false;
+  }
+
   auto l = LockForRead();
   return l->pb.has_cdcsdk_disable_dynamic_table_addition() &&
          l->pb.cdcsdk_disable_dynamic_table_addition();
