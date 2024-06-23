@@ -6110,7 +6110,7 @@ Status CatalogManager::DisableDynamicTableAdditionOnCDCSDKStream(
     RETURN_INVALID_REQUEST_STATUS("CDC Stream ID must be provided");
   }
 
-  if (FLAGS_enable_cdcsdk_dynamic_tables_disable_option) {
+  if (!FLAGS_enable_cdcsdk_dynamic_tables_disable_option) {
     RETURN_INVALID_REQUEST_STATUS(
         "For disabling addition of dynamic tables to CDC stream, "
         "\'enable_cdcsdk_dynamic_tables_disable_option\' gflag has to be set.");

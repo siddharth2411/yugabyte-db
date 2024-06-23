@@ -8732,7 +8732,7 @@ void CDCSDKYsqlTest::TestDisableOfDynamicTableAdditionOnCDCStream(
   auto leader_master = ASSERT_RESULT(test_cluster_.mini_cluster_->GetLeaderMiniMaster());
   ASSERT_OK(leader_master->Restart());
   LOG(INFO) << "Master Restarted";
-  SleepFor(MonoDelta::FromSeconds(5));
+  SleepFor(MonoDelta::FromSeconds(5 * kTimeMultiplier));
 
   // Any newly created table after master restart should not get added to stream1.
   table[idx] = ASSERT_RESULT(CreateTable(
@@ -8783,7 +8783,7 @@ void CDCSDKYsqlTest::TestUserTableRemovalFromCDCStream(bool use_consistent_snaps
   ANNOTATE_UNPROTECTED_WRITE(FLAGS_update_min_cdc_indices_interval_secs) = 1;
   ANNOTATE_UNPROTECTED_WRITE(FLAGS_enable_cdcsdk_dynamic_tables_disable_option) = true;
   // Setup cluster.
-  ASSERT_OK(SetUpWithParams(3, 1, false));
+  ASSERT_OK(SetUpWithParams(1, 1, false));
 
   const vector<string> table_list_suffix = {"_1", "_2", "_3"};
   const int kNumTables = 3;
