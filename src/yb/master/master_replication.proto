@@ -776,6 +776,15 @@ message DisableDynamicTableAdditionOnCDCSDKStreamResponsePB {
   optional MasterErrorPB error = 1;
 }
 
+message ValidateCDCStateEntriesForCDCSDKStreamRequestPB {
+  optional string stream_id = 1;
+}
+
+message ValidateCDCStateEntriesForCDCSDKStreamResponsePB {
+  optional MasterErrorPB error = 1;
+  repeated string updated_tablet_entries = 2;
+}
+
 service MasterReplication {
   option (yb.rpc.custom_service_name) = "yb.master.MasterService";
 
@@ -795,6 +804,8 @@ service MasterReplication {
       returns (RemoveUserTableFromCDCSDKStreamResponsePB);
   rpc DisableDynamicTableAdditionOnCDCSDKStream (DisableDynamicTableAdditionOnCDCSDKStreamRequestPB)
       returns (DisableDynamicTableAdditionOnCDCSDKStreamResponsePB);
+  rpc ValidateCDCStateEntriesForCDCSDKStream (ValidateCDCStateEntriesForCDCSDKStreamRequestPB)
+      returns (ValidateCDCStateEntriesForCDCSDKStreamResponsePB);
   rpc UpdateCDCStream (UpdateCDCStreamRequestPB) returns (UpdateCDCStreamResponsePB);
   rpc IsBootstrapRequired (IsBootstrapRequiredRequestPB) returns (IsBootstrapRequiredResponsePB);
   rpc GetUDTypeMetadata(GetUDTypeMetadataRequestPB) returns (GetUDTypeMetadataResponsePB);

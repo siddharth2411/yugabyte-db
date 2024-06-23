@@ -137,6 +137,9 @@ DEFINE_test_flag(bool, fail_universe_replication_merge, false, "Causes MergeUniv
     "fail with an error.");
 
 DEFINE_test_flag(bool, xcluster_fail_setup_stream_update, false, "Fail UpdateCDCStream RPC call");
+DEFINE_test_flag(bool, skip_updating_cdc_state_entries_on_table_removal, false,
+    "Skip updating checkpoint for cdc state table entries to max while removing a user table from "
+    "CDCSDK stream.");
 
 DECLARE_bool(xcluster_wait_on_ddl_alter);
 DECLARE_int32(master_rpc_timeout_ms);
@@ -6205,41 +6208,43 @@ Status CatalogManager::RemoveUserTableFromCDCSDKStream(
       RETURN_INVALID_REQUEST_STATUS("Stream and Table are not under the same namespace");
     }
 
-    // First we'll update the checkpoint to OpId max for all the cdc state entries correponding to
-    // the table. Therefore, get all the tablets for the table to be removed.
-    TabletInfos tablets;
-    tablets = table->GetTablets(IncludeInactive::kTrue);
+    if (!FLAGS_TEST_skip_updating_cdc_state_entries_on_table_removal) {
+      // First we'll update the checkpoint to OpId max for all the cdc state entries correponding to
+      // the table. Therefore, get all the tablets for the table to be removed.
+      TabletInfos tablets;
+      tablets = VERIFY_RESULT(table->GetTablets(IncludeInactive::kTrue));
 
-    std::unordered_set<TabletId> tablet_entries_to_be_removed;
-    for (const auto& tablet : tablets) {
-      tablet_entries_to_be_removed.insert(tablet->tablet_id());
-    }
-
-    Status iteration_status;
-    auto all_entry_keys = VERIFY_RESULT(
-        cdc_state_table_->GetTableRange({} /* just key columns */, &iteration_status));
-    std::vector<cdc::CDCStateTableEntry> entries_to_update;
-
-    // Set the checkpoint to max for all tablet, stream pairs from cdc_state for the given table.
-    for (const auto& entry_result : all_entry_keys) {
-      RETURN_NOT_OK(entry_result);
-      const auto& entry = *entry_result;
-
-      if (entry.key.stream_id == stream_id &&
-          tablet_entries_to_be_removed.contains(entry.key.tablet_id)) {
-        cdc::CDCStateTableEntry update_entry(entry.key);
-        update_entry.checkpoint = OpId::Max();
-        entries_to_update.emplace_back(std::move(update_entry));
-        LOG(INFO) << "Setting checkpoint to OpId::Max() for CDCSDK stream - "
-                  << entry.key.ToString();
+      std::unordered_set<TabletId> tablet_entries_to_be_removed;
+      for (const auto& tablet : tablets) {
+        tablet_entries_to_be_removed.insert(tablet->tablet_id());
       }
-    }
-    RETURN_NOT_OK(iteration_status);
 
-    if (!entries_to_update.empty()) {
-      RETURN_NOT_OK_PREPEND(
-          cdc_state_table_->UpdateEntries(entries_to_update),
-          "Error setting checkpoint to OpId::Max() in cdc_state table");
+      Status iteration_status;
+      auto all_entry_keys = VERIFY_RESULT(
+          cdc_state_table_->GetTableRange({} /* just key columns */, &iteration_status));
+      std::vector<cdc::CDCStateTableEntry> entries_to_update;
+
+      // Set the checkpoint to max for all tablet, stream pairs from cdc_state for the given table.
+      for (const auto& entry_result : all_entry_keys) {
+        RETURN_NOT_OK(entry_result);
+        const auto& entry = *entry_result;
+
+        if (entry.key.stream_id == stream_id &&
+            tablet_entries_to_be_removed.contains(entry.key.tablet_id)) {
+          cdc::CDCStateTableEntry update_entry(entry.key);
+          update_entry.checkpoint = OpId::Max();
+          entries_to_update.emplace_back(std::move(update_entry));
+          LOG(INFO) << "Setting checkpoint to OpId::Max() for CDCSDK stream - "
+                    << entry.key.ToString();
+        }
+      }
+      RETURN_NOT_OK(iteration_status);
+
+      if (!entries_to_update.empty()) {
+        RETURN_NOT_OK_PREPEND(
+            cdc_state_table_->UpdateEntries(entries_to_update),
+            "Error setting checkpoint to OpId::Max() in cdc_state table");
+      }
     }
 
     // Now remove the table from the CDC stream metadata & cdcsdk_tables_to_stream_map_ and persist
@@ -6268,17 +6273,20 @@ Status CatalogManager::RemoveUserTableFromCDCSDKStream(
     }
   }
 
-  // Finally, re-verify all tablet entries in cdc state for the given stream belong to only those
-  // tables that are part of the updated CDC stream metadata. This is to handle race between
-  // concurrent removal of table from stream & addition of children tablets to state table due to
-  // tablet split.
-  RETURN_NOT_OK(VerifyTabletEntriesInCDCStateForCDCSDKStream(stream_id));
-
   return Status::OK();
 }
 
-Status CatalogManager::VerifyTabletEntriesInCDCStateForCDCSDKStream(
-    const xrepl::StreamId& stream_id) {
+Status CatalogManager::ValidateCDCStateEntriesForCDCSDKStream(
+    const ValidateCDCStateEntriesForCDCSDKStreamRequestPB* req,
+    ValidateCDCStateEntriesForCDCSDKStreamResponsePB* resp, rpc::RpcContext* rpc) {
+  LOG(INFO) << "Servicing ValidateCDCStateEntriesForCDCSDKStream request from "
+            << RequestorString(rpc) << ": " << req->ShortDebugString();
+
+  if (!req->has_stream_id()) {
+    RETURN_INVALID_REQUEST_STATUS("CDC Stream ID must be provided");
+  }
+
+  auto stream_id = VERIFY_RESULT(xrepl::StreamId::FromString(req->stream_id()));
   CDCStreamInfoPtr stream;
   {
     SharedLock lock(mutex_);
@@ -6288,6 +6296,16 @@ Status CatalogManager::VerifyTabletEntriesInCDCStateForCDCSDKStream(
   if (stream == nullptr || stream->LockForRead()->is_deleting()) {
     return STATUS(
         NotFound, "Could not find CDC stream", MasterError(MasterErrorPB::OBJECT_NOT_FOUND));
+  }
+
+  if (!stream->IsCDCSDKStream()) {
+    RETURN_INVALID_REQUEST_STATUS("Not a CDC stream");
+  }
+
+  if (!stream->GetCdcsdkYsqlReplicationSlotName().empty()) {
+    RETURN_INVALID_REQUEST_STATUS(
+        "Cannot validate cdc state table entries from CDC streams that are associated with a "
+        "replication slot");
   }
 
   std::unordered_set<TableId> stream_table_ids;
@@ -6309,20 +6327,19 @@ Status CatalogManager::VerifyTabletEntriesInCDCStateForCDCSDKStream(
     RETURN_NOT_OK(entry_result);
     const auto& entry = *entry_result;
 
-    // We should never encounter slot's cdc state entry since this codepath is only meant to be
-    // executed on streams not associated with a replication slot. This is just a sanity check.
-    if (entry.key.stream_id == stream_id && entry.key.tablet_id != kCDCSDKSlotEntryTabletId) {
+    if (entry.key.stream_id == stream_id) {
       cdc_state_tablet_entries.push_back(entry.key.tablet_id);
     }
   }
   RETURN_NOT_OK(iteration_status);
 
-  // Get the tablet's table and verify that the table is present in the CDC stream metadata. If not,
-  // update checkpoint of such tablet entries to OpId::Max. For colocated tables, even if one of the
-  // colocated table is present in the CDC stream metadata, skip updating the checkpoint for that
-  // tablet, stream pair.
+  // Get the tablet info for all state table entries of the stream.
   auto tablet_infos = GetTabletInfos(cdc_state_tablet_entries);
 
+  // For each state table entry, verify that the tablet's table is present in the CDC stream
+  // metadata. If not, update checkpoint of such tablet entries to OpId::Max. For colocated tables,
+  // even if one of the colocated table is present in the CDC stream metadata, skip updating the
+  // checkpoint for that tablet, stream pair.
   for (const auto& tablet_info : tablet_infos) {
     bool table_found = false;
     for (const auto& table_id : tablet_info->GetTableIds()) {
@@ -6344,6 +6361,10 @@ Status CatalogManager::VerifyTabletEntriesInCDCStateForCDCSDKStream(
     RETURN_NOT_OK_PREPEND(
         cdc_state_table_->UpdateEntries(entries_to_update),
         "Error setting checkpoint to OpId::Max() in cdc_state table");
+  }
+
+  for (const auto& entry : entries_to_update) {
+    resp->add_updated_tablet_entries(entry.key.tablet_id);
   }
 
   return Status::OK();
