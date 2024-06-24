@@ -6379,7 +6379,7 @@ Status CatalogManager::ValidateCDCStateEntriesForCDCSDKStream(
     }
 
     if (!table_found) {
-      cdc::CDCStateTableEntry update_entry({tablet_info->tablet_id(), stream_id});
+      cdc::CDCStateTableEntry update_entry(tablet_info->tablet_id(), stream_id);
       update_entry.checkpoint = OpId::Max();
       entries_to_update.emplace_back(std::move(update_entry));
       LOG(INFO) << "Setting checkpoint to OpId::Max() for CDCSDK stream - "
