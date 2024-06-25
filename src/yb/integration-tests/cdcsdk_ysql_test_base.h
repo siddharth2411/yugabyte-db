@@ -117,6 +117,8 @@ DECLARE_uint64(TEST_cdcsdk_publication_list_refresh_interval_micros);
 DECLARE_bool(cdcsdk_enable_dynamic_table_support);
 DECLARE_bool(enable_cdcsdk_setting_get_changes_response_byte_limit);
 DECLARE_uint64(cdcsdk_vwal_getchanges_resp_max_size_bytes);
+DECLARE_bool(TEST_cdcsdk_add_indexes_to_stream);
+DECLARE_bool(cdcsdk_enable_cleanup_of_non_eligible_tables_from_stream);
 
 namespace yb {
 
@@ -780,7 +782,12 @@ class CDCSDKYsqlTest : public CDCSDKTestBase {
 
   std::string GetPubRefreshTimesString(vector<uint64_t> pub_refresh_times);
 
-  void TestNonUserTableShouldNotGetAddedToCDCStream (bool create_consistent_snapshot_stream);
+  void TestNonEligibleTableShouldNotGetAddedToCDCStream(bool create_consistent_snapshot_stream);
+
+  void TestNonEligibleTableRemovalFromCDCStream(bool use_consistent_snapshot_stream);
+
+  void TestChildTabletsOfNonEligibleTableDoNotGetAddedToCDCStream(
+      bool use_consistent_snapshot_stream);
 };
 
 }  // namespace cdc
