@@ -4413,6 +4413,25 @@ Result<tablet::TabletPeerPtr> CDCServiceImpl::GetServingTablet(const TabletId& t
   return context_->GetServingTablet(tablet_id);
 }
 
+bool IsStreamInactiveError(Status status) {
+  if (!status.ok() && status.IsInternalError() &&
+      status.message().ToBuffer().find("expired for Tablet") != std::string::npos) {
+    return true;
+  }
+
+  return false;
+}
+
+bool IsIntentGCError(Status status) {
+  if (!status.ok() && status.IsInternalError() &&
+      status.message().ToBuffer().find("CDCSDK Trying to fetch already GCed intents") !=
+          std::string::npos) {
+    return true;
+  }
+
+  return false;
+}
+
 void CDCServiceImpl::InitVirtualWALForCDC(
     const InitVirtualWALForCDCRequestPB* req, InitVirtualWALForCDCResponsePB* resp,
     rpc::RpcContext context) {
@@ -4520,6 +4539,11 @@ void CDCServiceImpl::GetConsistentChanges(
         Format("GetConsistentChanges failed for stream_id: $0 with error: $1", stream_id, s);
     if (!s.IsTryAgain()) {
       LOG(WARNING) << msg;
+      // Propogate the error to the client only when the stream has expired or the intents have been
+      // garbage collected.
+      if (IsStreamInactiveError(s) || IsIntentGCError(s)) {
+        RPC_STATUS_RETURN_ERROR(s, resp->mutable_error(), CDCErrorPB::INTERNAL_ERROR, context);
+      }
     } else {
       YB_LOG_EVERY_N_SECS(WARNING, 300) << msg;
     }
