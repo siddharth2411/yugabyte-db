@@ -169,6 +169,10 @@ DEFINE_RUNTIME_AUTO_bool(cdcsdk_enable_identification_of_non_eligible_tables,
 TAG_FLAG(cdcsdk_enable_identification_of_non_eligible_tables, advanced);
 TAG_FLAG(cdcsdk_enable_identification_of_non_eligible_tables, hidden);
 
+DEFINE_test_flag(bool, cdcsdk_skip_disabling_dynamic_table_addition_on_stream_creation, false,
+                 "When enabled, dynamic table addition wont be disabled on CDCSDK streams "
+                 "by default");
+
 DECLARE_bool(xcluster_wait_on_ddl_alter);
 DECLARE_int32(master_rpc_timeout_ms);
 DECLARE_bool(enable_xcluster_auto_flag_validation);
@@ -980,6 +984,17 @@ Status CatalogManager::CreateNewXReplStream(
 
     if (has_replication_slot_name) {
       metadata->set_cdcsdk_ysql_replication_slot_name(req.cdcsdk_ysql_replication_slot_name());
+    }
+
+    // Disable dynamic table addition on CDCSDK streams not associated with a replication slot.
+    LOG(INFO) << "sid: has_replication_slot_name: " << (has_replication_slot_name ? "true" : "false");
+    LOG(INFO) << "sid:FLAGS_TEST_cdcsdk_skip_disabling_dynamic_table_addition_on_stream_creation: "
+              << (FLAGS_TEST_cdcsdk_skip_disabling_dynamic_table_addition_on_stream_creation
+                      ? "true"
+                      : "false");
+    if (mode == CreateNewCDCStreamMode::kCdcsdkNamespaceAndTableIds && !has_replication_slot_name &&
+        !FLAGS_TEST_cdcsdk_skip_disabling_dynamic_table_addition_on_stream_creation) {
+      metadata->set_cdcsdk_disable_dynamic_table_addition(true);
     }
 
     // Add the stream to the in-memory map.
