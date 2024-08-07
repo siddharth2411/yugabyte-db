@@ -2182,7 +2182,7 @@ Status CatalogManager::RemoveNonEligibleTablesFromCDCSDKStreams(
       if (!result.ok()) {
         LOG(WARNING) << "Encountered error while trying to update/delete tablets entries of table: "
                      << table_id << ", from cdc_state table for stream" << stream->id() << ": "
-                     << status;
+                     << result.status();
         stream_pending = true;
         continue;
       }
@@ -2197,7 +2197,8 @@ Status CatalogManager::RemoveNonEligibleTablesFromCDCSDKStreams(
       Status status = RemoveTableFromCDCStreamMetadataAndMaps(stream, table_id);
       if (!status.ok()) {
         LOG(WARNING) << "Encountered error while trying to remove non-eligible table " << table_id
-                     << " from metadata of stream " << stream->StreamId() << " and maps. ";
+                     << " from metadata of stream " << stream->StreamId() << " and maps. - "
+                     << status;
         stream_pending = true;
         continue;
       }
@@ -3006,18 +3007,20 @@ Status CatalogManager::UpdateCDCProducerOnTabletSplit(
   for (const auto stream_type : {cdc::XCLUSTER, cdc::CDCSDK}) {
     if (stream_type == cdc::CDCSDK &&
         FLAGS_cdcsdk_enable_cleanup_of_non_eligible_tables_from_stream) {
-      const auto& table_info = GetTableInfo(producer_table_id);
-      // Skip adding children tablet entries in cdc state if the table is an index or a mat view.
-      // These tables, if present in CDC stream, are anyway going to be removed by a bg thread. This
-      // check ensures even if there is a race condition where a tablet of a non-eligible table
-      // splits and concurrently we are removing such tables from stream, the child tables do not
-      // get added.
-      {
-        SharedLock lock(mutex_);
-        if (!IsTableEligibleForCDCSDKStream(table_info, std::nullopt)) {
-          LOG(INFO) << "Skipping adding children tablets to cdc state for table "
-                    << producer_table_id << " as it is not meant to part of a CDC stream";
-          continue;
+      const auto table_info = GetTableInfo(producer_table_id);
+      if (table_info) {
+        // Skip adding children tablet entries in cdc state if the table is an index or a mat view.
+        // These tables, if present in CDC stream, are anyway going to be removed by a bg thread.
+        // This check ensures even if there is a race condition where a tablet of a non-eligible
+        // table splits and concurrently we are removing such tables from stream, the child tables
+        // do not get added.
+        {
+          SharedLock lock(mutex_);
+          if (!IsTableEligibleForCDCSDKStream(table_info, std::nullopt)) {
+            LOG(INFO) << "Skipping adding children tablets to cdc state for table "
+                      << producer_table_id << " as it is not meant to part of a CDC stream";
+            continue;
+          }
         }
       }
     }
@@ -4629,13 +4632,15 @@ CatalogManager::UpdateCheckpointForTabletEntriesInCDCState(
       table = tables_->FindTableOrNull(table_to_be_removed);
     }
 
-    // First we'll update the checkpoint to OpId max for all the cdc state entries correponding to
-    // the table. Therefore, get all the tablets for the table to be removed.
-    TabletInfos tablets;
-    tablets = VERIFY_RESULT(table->GetTablets(IncludeInactive::kTrue));
+    if (table) {
+      // First we'll update the checkpoint to OpId max for all the cdc state entries correponding to
+      // the table. Therefore, get all the tablets for the table to be removed.
+      TabletInfos tablets;
+      tablets = VERIFY_RESULT(table->GetTablets(IncludeInactive::kTrue));
 
-    for (const auto& tablet : tablets) {
-      tablet_entries_to_be_removed.insert(tablet->tablet_id());
+      for (const auto& tablet : tablets) {
+        tablet_entries_to_be_removed.insert(tablet->tablet_id());
+      }
     }
   }
 
@@ -4677,19 +4682,25 @@ CatalogManager::UpdateCheckpointForTabletEntriesInCDCState(
   // stream metadata, skip updating the checkpoint for that tablet, stream pair.
   for (const auto& tablet_info : tablet_infos) {
     bool table_found = false;
-    for (const auto& table_id : tablet_info->GetTableIds()) {
-      if (tables_in_stream_metadata.contains(table_id)) {
-        table_found = true;
+    // If the TabletInfo is not found for tablet_id of a particular state table entry, updating the
+    // checkpoint wont have any effect as the physical tablet has been deleted. Even
+    // UpdatePeersAndMetrics would not find this tablet while trying to move barriers. Therefore, we
+    // can ignore this entry.
+    if (tablet_info) {
+      for (const auto& table_id : tablet_info->GetTableIds()) {
+        if (tables_in_stream_metadata.contains(table_id)) {
+          table_found = true;
+        }
       }
-    }
 
-    if (!table_found) {
-      cdc::CDCStateTableEntry update_entry(tablet_info->tablet_id(), stream_id);
-      update_entry.checkpoint = OpId::Max();
-      entries_to_update.emplace_back(std::move(update_entry));
-      LOG_WITH_FUNC(INFO)
-          << "Setting checkpoint to OpId::Max() for cdc state table entry (tablet,stream) - "
-          << update_entry.ToString();
+      if (!table_found) {
+        cdc::CDCStateTableEntry update_entry(tablet_info->tablet_id(), stream_id);
+        update_entry.checkpoint = OpId::Max();
+        entries_to_update.emplace_back(std::move(update_entry));
+        LOG_WITH_FUNC(INFO)
+            << "Setting checkpoint to OpId::Max() for cdc state table entry (tablet,stream) - "
+            << tablet_info->tablet_id() << ", " << stream_id;
+      }
     }
   }
 
