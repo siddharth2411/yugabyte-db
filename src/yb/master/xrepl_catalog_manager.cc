@@ -2184,7 +2184,7 @@ Status CatalogManager::RemoveNonEligibleTablesFromCDCSDKStreams(
 
       if (!result.ok()) {
         LOG(WARNING) << "Encountered error while trying to update/delete tablets entries of table: "
-                     << table_id << ", from cdc_state table for stream" << stream->id() << ": "
+                     << table_id << ", from cdc_state table for stream: " << stream->id() << " - "
                      << result.status();
         stream_pending = true;
         continue;
