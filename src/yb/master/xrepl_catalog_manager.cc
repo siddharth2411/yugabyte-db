@@ -4673,6 +4673,9 @@ CatalogManager::UpdateCheckpointForTabletEntriesInCDCState(
 
     bool should_update_entry = false;
 
+    // A state table entry can qualify for checkpoint update based on if a particular table is being
+    // removed or if all the state table entries are just being validated and synced with tables in
+    // stream metadata.
     if (!table_to_be_removed.empty()) {
       bool belongs_to_removed_table = false;
       // tablet belongs to other colocated tables in addition to the table being removed.
