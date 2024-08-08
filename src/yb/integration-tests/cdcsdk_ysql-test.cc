@@ -9562,7 +9562,7 @@ TEST_F(CDCSDKYsqlTest, TestNonEligibleTableCleanupWithDropTable) {
       index, 0, &idx_tablets_after_dropping_idx, /* partition_list_version=*/nullptr));
 
   // Drop table cleanup from CDC stream is disabled, therefore the stream will be identified for
-  // cleanup of the index and therefore the cleanup of non-eligible tables codepath will remove the
+  // cleanup of the index and the cleanup of non-eligible tables codepath will remove the
   // index from stream metadata and update the state table entries. UpdatePeersAndMetrics may or may
   // not be able to delete the entry based on if the tablet peer is found or not.
   SleepFor(MonoDelta::FromSeconds(5 * kTimeMultiplier));
@@ -9571,13 +9571,10 @@ TEST_F(CDCSDKYsqlTest, TestNonEligibleTableCleanupWithDropTable) {
       stream_id, expected_tables,
       "Waiting for GetDBStreamInfo after table removal from CDC stream.");
   LOG(INFO) << "Stream, after master restart, only contains the user table.";
-  // for (const auto& tablet : idx_tablets) {
-  //   auto row = ASSERT_RESULT(ReadFromCdcStateTable(stream_id, tablet.tablet_id()));
-  //   ASSERT_EQ(row.op_id, OpId::Max());
-  // }
 
-  // ANNOTATE_UNPROTECTED_WRITE(FLAGS_TEST_cdcsdk_disable_drop_table_cleanup) = false;
-  // // Drop table cleanup will directly delete the state table entry belonging to index.
+  ANNOTATE_UNPROTECTED_WRITE(FLAGS_TEST_cdcsdk_disable_drop_table_cleanup) = false;
+  // Incase the state table entry hasnt been deleted by UpdatePeersAndMetrics, drop table cleanup bg
+  // thread will directly delete the state table entry belonging to index.
   SleepFor(MonoDelta::FromSeconds(5 * kTimeMultiplier));
   for (const auto& tablet : idx_tablets) {
     expected_tablets.erase(tablet.tablet_id());
