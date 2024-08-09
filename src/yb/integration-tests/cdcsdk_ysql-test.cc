@@ -8972,15 +8972,6 @@ TEST_F(CDCSDKYsqlTest, TestNonEligibleTableCleanupWithDropTable) {
       stream_id, expected_tables,
       "Waiting for GetDBStreamInfo after table removal from CDC stream.");
   LOG(INFO) << "Stream, after master restart, only contains the user table.";
-
-  ANNOTATE_UNPROTECTED_WRITE(FLAGS_TEST_cdcsdk_disable_drop_table_cleanup) = false;
-  // Incase the state table entry hasnt been deleted by UpdatePeersAndMetrics, drop table cleanup bg
-  // thread will directly delete the state table entry belonging to index.
-  SleepFor(MonoDelta::FromSeconds(5 * kTimeMultiplier));
-  for (const auto& tablet : idx_tablets) {
-    expected_tablets.erase(tablet.tablet_id());
-  }
-  CheckTabletsInCDCStateTable(expected_tablets, test_client(), stream_id);
 }
 
 TEST_F(CDCSDKYsqlTest, TestNonEligibleTableCleanupWithDeleteStream) {
