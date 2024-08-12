@@ -987,11 +987,6 @@ Status CatalogManager::CreateNewXReplStream(
     }
 
     // Disable dynamic table addition on CDCSDK streams not associated with a replication slot.
-    LOG(INFO) << "sid: has_replication_slot_name: " << (has_replication_slot_name ? "true" : "false");
-    LOG(INFO) << "sid:FLAGS_TEST_cdcsdk_skip_disabling_dynamic_table_addition_on_stream_creation: "
-              << (FLAGS_TEST_cdcsdk_skip_disabling_dynamic_table_addition_on_stream_creation
-                      ? "true"
-                      : "false");
     if (mode == CreateNewCDCStreamMode::kCdcsdkNamespaceAndTableIds && !has_replication_slot_name &&
         !FLAGS_TEST_cdcsdk_skip_disabling_dynamic_table_addition_on_stream_creation) {
       metadata->set_cdcsdk_disable_dynamic_table_addition(true);
