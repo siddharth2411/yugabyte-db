@@ -307,6 +307,8 @@ void CatalogManagerBgTasks::Run() {
       }
 
       {
+        // TODO(Siddharth): remove this preview flag andinstead guard with the dynamic table with
+        // table removal auto flag.
         if (FLAGS_cdcsdk_enable_cleanup_of_non_eligible_tables_from_stream &&
             FLAGS_cdcsdk_enable_dynamic_table_addition_with_table_cleanup) {
           // Find if there are any non eligible tables (indexes, mat views) present in cdcsdk
@@ -320,8 +322,8 @@ void CatalogManagerBgTasks::Run() {
               &non_user_tables_to_streams_map);
 
           if (s.ok() && !non_user_tables_to_streams_map.empty()) {
-            s = catalog_manager_->RemoveNonEligibleTablesFromCDCSDKStreams(
-                non_user_tables_to_streams_map, l.epoch());
+            s = catalog_manager_->RemoveTablesFromCDCSDKStreams(
+                non_user_tables_to_streams_map, /* non_eligible_table_cleanup */ true, l.epoch());
           }
           if (!s.ok()) {
             YB_LOG_EVERY_N(WARNING, 10)
@@ -329,6 +331,23 @@ void CatalogManagerBgTasks::Run() {
                    "tables from cdc_state table: "
                 << s.ToString();
           }
+        }
+      }
+
+      {
+        TableStreamIdsMap tables_to_be_removed_streams_map;
+        Status s =
+            catalog_manager_->FindCDCSDKStreamsForTableRemoval(&tables_to_be_removed_streams_map);
+
+        if (s.ok() && !tables_to_be_removed_streams_map.empty()) {
+          s = catalog_manager_->RemoveTablesFromCDCSDKStreams(
+              tables_to_be_removed_streams_map, /* non_eligible_table_cleanup */ false, l.epoch());
+        }
+
+        if (!s.ok()) {
+          YB_LOG_EVERY_N(WARNING, 10) << "Encountered failure while trying to remove "
+                                         "tables from stream metadata & updating cdc_state table: "
+                                      << s.ToString();
         }
       }
 

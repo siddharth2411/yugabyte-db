@@ -1459,6 +1459,14 @@ class CatalogManager : public tserver::TabletPeerLookupIf,
       const google::protobuf::RepeatedPtrField<std::string>& table_ids,
       const std::vector<TableInfoPtr>& eligible_tables_info) REQUIRES(mutex_);
 
+  // This method compares all tables in the namespace eligible for a CDCSDK stream to all the tables
+  // added to a CDCSDK stream, to find indexes / mat views that are part of the CDCSDK streams.
+  void FindAllUnproccesedUnqualifiedTablesInCDCSDKStream(
+      const xrepl::StreamId& stream_id,
+      const google::protobuf::RepeatedPtrField<std::string>& qualified_table_ids,
+      const google::protobuf::RepeatedPtrField<std::string>& unqualified_table_ids,
+      const std::vector<TableInfoPtr>& eligible_tables_info);
+
   Status ValidateCDCSDKRequestProperties(
       const CreateCDCStreamRequestPB& req, const std::string& source_type_option_value,
       const std::string& record_type_option_value, const std::string& id_type_option_value);
@@ -1470,8 +1478,25 @@ class CatalogManager : public tserver::TabletPeerLookupIf,
   Status ProcessNewTablesForCDCSDKStreams(
       const TableStreamIdsMap& table_to_unprocessed_streams_map, const LeaderEpoch& epoch);
 
-  Status RemoveNonEligibleTablesFromCDCSDKStreams(
-      const TableStreamIdsMap& non_user_tables_to_streams_map, const LeaderEpoch& epoch);
+  // Process the removal of tables from CDCSDK streams.
+  Status RemoveTablesFromCDCSDKStreams(
+      const TableStreamIdsMap& non_user_tables_to_streams_map, bool non_eligible_table_cleanup,
+      const LeaderEpoch& epoch);
+
+  Status AddTableForRemovalFromCDCDKStream(
+      const TableId& table_id, const CDCStreamInfoPtr& stream);
+
+  Status ValidateStreamForTableRemoval(const CDCStreamInfoPtr& stream);
+
+  Status ValidateTableForRemovalFromCDCSDKStream(
+      const scoped_refptr<TableInfo>& table, bool check_for_ineligibility);
+
+  // Validate the streams in 'cdcsdk_unprocessed_removed_tables_to_streams_' for table removal and
+  // get the StreamInfo.
+  Status FindCDCSDKStreamsForTableRemoval(TableStreamIdsMap* tables_to_be_removed_streams_map);
+
+  void RemoveStreamsFromUnprocessedRemovedTableMap(
+      const TableId& table_id, const std::unordered_set<xrepl::StreamId>& stream_ids);
 
   // Find all the CDC streams that have been marked as provided state.
   Result<std::vector<CDCStreamInfoPtr>> FindXReplStreamsMarkedForDeletion(
@@ -2883,10 +2908,14 @@ class CatalogManager : public tserver::TabletPeerLookupIf,
       const TabletInfo& tablet, const ScheduleMinRestoreTime& schedule_to_min_restore_time)
       EXCLUDES(mutex_);
 
-  Result<std::vector<cdc::CDCStateTableEntry>> UpdateCheckpointForTabletEntriesInCDCState(
+  Status UpdateCheckpointForTabletEntriesInCDCState(
       const xrepl::StreamId& stream_id,
       const std::unordered_set<TableId>& tables_in_stream_metadata,
-      const TableId& table_to_be_removed = "");
+      const TableInfoPtr& table_to_be_removed);
+
+  Result<std::vector<cdc::CDCStateTableEntry>> SyncCDCStateTableEntries(
+      const xrepl::StreamId& stream_id,
+      const std::unordered_set<TableId>& tables_in_stream_metadata);
 
   Status RemoveTableFromCDCStreamMetadataAndMaps(
       const CDCStreamInfoPtr stream, const TableId table_id);
@@ -2972,6 +3001,14 @@ class CatalogManager : public tserver::TabletPeerLookupIf,
   // function: 'FindAllNonEligibleTablesInCDCSDKStream'.
   std::unordered_map<NamespaceId, std::unordered_set<TableId>>
       namespace_to_cdcsdk_non_eligible_table_map_ GUARDED_BY(cdcsdk_non_eligible_table_mutex_);
+
+  mutable MutexType cdcsdk_table_removal_mutex_;
+  // In-memory map containing tables to be removed from a CDCSDK stream. Will be
+  // populated by two entities:
+  // 1. Table removal requested by yb-admin command
+  // 2. Automatic table removal by UpdatePeersAndMetrics for tables not of interest/expired.
+  std::unordered_map<TableId, std::unordered_set<xrepl::StreamId>>
+      cdcsdk_unprocessed_removed_tables_to_streams_ GUARDED_BY(cdcsdk_table_removal_mutex_);
 
   std::unordered_map<TableId, std::unordered_set<xrepl::StreamId>> cdcsdk_tables_to_stream_map_
       GUARDED_BY(mutex_);

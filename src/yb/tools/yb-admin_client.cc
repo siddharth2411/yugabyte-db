@@ -3835,8 +3835,9 @@ Status ClusterAdminClient::RemoveUserTableFromCDCSDKStream(
     return StatusFromPB(resp.error().status());
   }
 
-  cout << "Successfully removed user table: " << table_id << " from CDC stream: " << stream_id
-       << "\n";
+  cout << "Table " << table_id << " removal from stream " << stream_id << " sent asynchronously.\n"
+       << "For confirmation, please run get_change_data_stream_info yb-admin command after "
+          "sometime. The output should contain the removed table under unqualified_table_info. \n";
 
   return Status::OK();
 }
