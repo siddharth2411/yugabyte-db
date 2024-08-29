@@ -121,7 +121,6 @@ DECLARE_uint64(cdcsdk_vwal_getchanges_resp_max_size_bytes);
 DECLARE_bool(cdcsdk_enable_dynamic_tables_disable_option);
 DECLARE_bool(TEST_cdcsdk_skip_updating_cdc_state_entries_on_table_removal);
 DECLARE_bool(TEST_cdcsdk_add_indexes_to_stream);
-DECLARE_bool(cdcsdk_enable_cleanup_of_non_eligible_tables_from_stream);
 DECLARE_bool(TEST_cdcsdk_skip_stream_active_check);
 DECLARE_bool(TEST_cdcsdk_disable_drop_table_cleanup);
 DECLARE_bool(TEST_cdcsdk_disable_deleted_stream_cleanup);
@@ -583,7 +582,8 @@ class CDCSDKYsqlTest : public CDCSDKTestBase {
   void VerifyTablesInStreamMetadata(
       const xrepl::StreamId& stream_id, const std::unordered_set<std::string>& expected_table_ids,
       const std::string& timeout_msg,
-      const std::unordered_set<std::string>& expected_unqualified_table_ids = {});
+      const std::optional<std::unordered_set<std::string>>& expected_unqualified_table_ids =
+          std::nullopt);
 
   Status ChangeLeaderOfTablet(size_t new_leader_index, const TabletId tablet_id);
 

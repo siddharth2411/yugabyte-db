@@ -2447,13 +2447,13 @@ Result<string> CDCSDKYsqlTest::GetUniverseId(PostgresMiniCluster* cluster) {
   void CDCSDKYsqlTest::VerifyTablesInStreamMetadata(
       const xrepl::StreamId& stream_id, const std::unordered_set<std::string>& expected_table_ids,
       const std::string& timeout_msg,
-      const std::unordered_set<std::string>& expected_unqualified_table_ids) {
+      const std::optional<std::unordered_set<std::string>>& expected_unqualified_table_ids) {
     ASSERT_OK(WaitFor(
         [&]() -> Result<bool> {
           auto get_resp = GetDBStreamInfo(stream_id);
           if (get_resp.ok() && !get_resp->has_error()) {
             bool qualified_tables_matched = false;
-            bool unqualified_tables_matched = expected_unqualified_table_ids.empty() ? true : false;
+            bool unqualified_tables_matched = expected_unqualified_table_ids.has_value() ? false : true;
 
             const uint64_t table_info_size = get_resp->table_info_size();
             if (table_info_size == expected_table_ids.size()) {
@@ -2466,14 +2466,15 @@ Result<string> CDCSDKYsqlTest::GetUniverseId(PostgresMiniCluster* cluster) {
               }
             }
 
-            if (!expected_unqualified_table_ids.empty()) {
+            if (expected_unqualified_table_ids.has_value()) {
+              auto expected_unqualified_table_ids_set = *expected_unqualified_table_ids;
               const uint64_t unqualified_table_info_size = get_resp->unqualified_table_info_size();
-              if (unqualified_table_info_size == expected_unqualified_table_ids.size()) {
+              if (unqualified_table_info_size == expected_unqualified_table_ids_set.size()) {
                 std::unordered_set<std::string> unqualified_table_ids;
                 for (auto entry : get_resp->unqualified_table_info()) {
                   unqualified_table_ids.insert(entry.table_id());
                 }
-                if (expected_unqualified_table_ids == unqualified_table_ids) {
+                if (expected_unqualified_table_ids_set == unqualified_table_ids) {
                   unqualified_tables_matched = true;
                 }
               }

@@ -2909,8 +2909,9 @@ void CDCServiceImpl::UpdateTabletPeersWithMaxCheckpoint(
 
     if (!s.ok()) {
       failed_tablet_ids->insert(tablet_id);
-      VLOG(1) << "Could not successfully update checkpoint as 'OpId::Max' for tablet: " << tablet_id
-              << ", on all tablet peers";
+      YB_LOG_EVERY_N_SECS(INFO, 300)
+          << "Could not successfully update checkpoint as 'OpId::Max' for tablet: " << tablet_id
+          << ", on all tablet peers - " << s;
     }
   }
 }

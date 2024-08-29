@@ -3007,6 +3007,8 @@ class CatalogManager : public tserver::TabletPeerLookupIf,
   // populated by two entities:
   // 1. Table removal requested by yb-admin command
   // 2. Automatic table removal by UpdatePeersAndMetrics for tables not of interest/expired.
+  // Will be refreshed on master restart / leadership change through the funcion:
+  //  'FindAllUnproccesedUnqualifiedTablesInCDCSDKStream'
   std::unordered_map<TableId, std::unordered_set<xrepl::StreamId>>
       cdcsdk_unprocessed_removed_tables_to_streams_ GUARDED_BY(cdcsdk_table_removal_mutex_);
 
