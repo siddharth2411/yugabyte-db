@@ -1414,6 +1414,20 @@ Status Log::GetSegmentsToGCUnlocked(int64_t min_op_idx, SegmentSequence* segment
   RETURN_NOT_OK(reader_->GetSegmentPrefixNotIncluding(
       min_op_idx, xrepl_min_replicated_index, segments_to_gc));
 
+  if (segments_to_gc->size() > 0) {
+    // Read the consistent stream safe time for the last segment that can be cleaned up.
+    const ReadableLogSegmentPtr& last_segment_available_for_gc =
+        VERIFY_RESULT(segments_to_gc->back());
+    if (last_segment_available_for_gc->footer().has_consistent_stream_safe_time()) {
+      auto consistent_stream_safe_time =
+          last_segment_available_for_gc->footer().consistent_stream_safe_time();
+      LOG_WITH_PREFIX(INFO) << "setting max_stream_safe_time_from_gc_segments to "
+                            << consistent_stream_safe_time;
+      stream_safe_time_from_gc_segments_.store(
+          consistent_stream_safe_time, std::memory_order_release);
+    }
+  }
+
   const auto max_to_delete =
       std::max<ssize_t>(reader_->num_segments() - FLAGS_log_min_segments_to_retain, 0);
   ssize_t segments_to_gc_size = segments_to_gc->size();
@@ -2128,6 +2142,10 @@ Status Log::ResetLastSyncedEntryOpId(const OpId& op_id) {
   LOG_WITH_PREFIX(INFO) << "Reset last synced entry op id from " << old_value << " to " << op_id;
 
   return Status::OK();
+}
+
+uint64_t Log::GetStreamSafeTimeFromGCSegments() const {
+  return stream_safe_time_from_gc_segments_.load(std::memory_order_acquire);
 }
 
 Log::~Log() {

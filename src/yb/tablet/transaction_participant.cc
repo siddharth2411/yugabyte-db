@@ -531,14 +531,22 @@ class TransactionParticipant::Impl
   }
 
   // Cleans the intents those are consumed by consumers.
-  void SetIntentRetainOpIdAndTime(const OpId& op_id, const MonoDelta& cdc_sdk_op_id_expiration) {
+  void SetIntentRetainOpIdAndTime(
+      const OpId& op_id, const MonoDelta& cdc_sdk_op_id_expiration,
+      const HybridTime& min_start_ht_among_cdcsdk_interested_txns) {
     MinRunningNotifier min_running_notifier(&applier_);
     std::lock_guard lock(mutex_);
     VLOG(1) << "Setting RetainOpId: " << op_id
             << ", previous cdc_sdk_min_checkpoint_op_id_: " << cdc_sdk_min_checkpoint_op_id_;
 
+    VLOG(1) << "Setting min_start_ht_among_cdcsdk_interested_txns: "
+            << min_start_ht_among_cdcsdk_interested_txns
+            << ", previous min_start_ht_among_cdcsdk_interested_txns: "
+            << min_start_ht_among_cdcsdk_interested_txns_;
+
     cdc_sdk_min_checkpoint_op_id_expiration_ = CoarseMonoClock::now() + cdc_sdk_op_id_expiration;
     cdc_sdk_min_checkpoint_op_id_ = op_id;
+    min_start_ht_among_cdcsdk_interested_txns_ = min_start_ht_among_cdcsdk_interested_txns;
 
     // If new op_id same as  cdc_sdk_min_checkpoint_op_id_ it means already intent before it are
     // already cleaned up, so no need call clean transactions, else call clean the transactions.
@@ -563,6 +571,15 @@ class TransactionParticipant::Impl
       min_checkpoint = OpId::Max();
     }
     return min_checkpoint;
+  }
+
+  HybridTime GetMinStartHTAmongCDCSDKInterestedTxns() EXCLUDES(mutex_) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return GetMinStartHTAmongCDCSDKInterestedTxnsUnlocked();
+  }
+
+  HybridTime GetMinStartHTAmongCDCSDKInterestedTxnsUnlocked() REQUIRES(mutex_) {
+    return min_start_ht_among_cdcsdk_interested_txns_;
   }
 
   HybridTime GetMinStartTimeAmongAllRunningTransactions() {
@@ -2200,6 +2217,8 @@ class TransactionParticipant::Impl
   std::atomic<OpId> historical_max_op_id = OpId::Invalid();
   CoarseTimePoint cdc_sdk_min_checkpoint_op_id_expiration_ = CoarseTimePoint::min();
 
+  HybridTime min_start_ht_among_cdcsdk_interested_txns_{HybridTime::kInvalid};
+
   std::condition_variable requests_completed_cond_;
 
   std::unique_ptr<docdb::WaitQueue> wait_queue_;
@@ -2412,8 +2431,10 @@ HybridTime TransactionParticipantContext::Now() {
 }
 
 void TransactionParticipant::SetIntentRetainOpIdAndTime(
-    const yb::OpId& op_id, const MonoDelta& cdc_sdk_op_id_expiration) {
-  impl_->SetIntentRetainOpIdAndTime(op_id, cdc_sdk_op_id_expiration);
+    const yb::OpId& op_id, const MonoDelta& cdc_sdk_op_id_expiration,
+    const HybridTime& min_start_ht_among_cdcsdk_interested_txns) {
+  impl_->SetIntentRetainOpIdAndTime(
+      op_id, cdc_sdk_op_id_expiration, min_start_ht_among_cdcsdk_interested_txns);
 }
 
 OpId TransactionParticipant::GetRetainOpId() const {
@@ -2426,6 +2447,10 @@ CoarseTimePoint TransactionParticipant::GetCheckpointExpirationTime() const {
 
 OpId TransactionParticipant::GetLatestCheckPoint() const {
   return impl_->GetLatestCheckPoint();
+}
+
+HybridTime TransactionParticipant::GetMinStartHTAmongCDCSDKInterestedTxns() const {
+  return impl_->GetMinStartHTAmongCDCSDKInterestedTxns();
 }
 
 HybridTime TransactionParticipant::GetMinStartTimeAmongAllRunningTransactions() const {

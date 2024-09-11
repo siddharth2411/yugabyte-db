@@ -1242,7 +1242,12 @@ Status TabletPeer::SetCDCSDKRetainOpIdAndTime(
     RETURN_NOT_OK(CheckRunning());
     auto txn_participant = tablet_->transaction_participant();
     if (txn_participant) {
-      txn_participant->SetIntentRetainOpIdAndTime(cdc_sdk_op_id, cdc_sdk_op_id_expiration);
+      Log* log = log_atomic_.load(std::memory_order_acquire);
+      auto min_start_ht_among_cdcsdk_interested_txns =
+          tablet_->GetMinStartHTAmongCDCSDKInterestedTxns(log);
+
+      txn_participant->SetIntentRetainOpIdAndTime(
+          cdc_sdk_op_id, cdc_sdk_op_id_expiration, min_start_ht_among_cdcsdk_interested_txns);
       if (GetAtomicFlag(&FLAGS_cdc_immediate_transaction_cleanup)) {
         tablet_->CleanupIntentFiles();
       }

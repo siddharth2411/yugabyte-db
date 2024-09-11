@@ -10746,5 +10746,83 @@ TEST_F(CDCSDKYsqlTest, TestCleanupOfEligibleAndNonEligibleTables) {
   LOG(INFO) << "Stream, after master restart, only contains the table_1.";
 }
 
+TEST_F(CDCSDKYsqlTest, TestConsumptionWithLongIntentRetention) {
+  ANNOTATE_UNPROTECTED_WRITE(FLAGS_yb_enable_cdc_consistent_snapshot_streams) = true;
+  ANNOTATE_UNPROTECTED_WRITE(FLAGS_cdc_stream_records_threshold_size_bytes) = 1000;
+  ANNOTATE_UNPROTECTED_WRITE(FLAGS_update_min_cdc_indices_interval_secs) = 1;
+  ANNOTATE_UNPROTECTED_WRITE(FLAGS_cdc_state_checkpoint_update_interval_ms) = 0;
+  ANNOTATE_UNPROTECTED_WRITE(FLAGS_initial_log_segment_size_bytes) = 100;
+  ANNOTATE_UNPROTECTED_WRITE(FLAGS_log_segment_size_bytes) = 100;
+  ANNOTATE_UNPROTECTED_WRITE(FLAGS_log_min_seconds_to_retain) = 1;
+  ANNOTATE_UNPROTECTED_WRITE(FLAGS_cdc_wal_retention_time_secs) = 1;
+  ANNOTATE_UNPROTECTED_WRITE(FLAGS_cdc_min_replicated_index_considered_stale_secs) = 1;
+  // The following flag trigger compaction of SST files. Although compaction doesnt really delete
+  // any record when CDC is enabled, it will reduce the SST files that will change in the max
+  // record_time of the new SST files generated. Setting it to a high value to prevent compaction
+  // and see 'cdc only' intent SST files getting deleted after consumption.
+  ANNOTATE_UNPROTECTED_WRITE(FLAGS_rocksdb_level0_file_num_compaction_trigger) = 100;
+
+  int num_tservers = 1;
+  google::SetVLOGLevel("cdc_service*", 2);
+  google::SetVLOGLevel("transaction_participant*", 2);
+  google::SetVLOGLevel("tablet*", 4);
+  ASSERT_OK(SetUpWithParams(num_tservers, 1, false));
+
+  auto num_tablets = 1;
+  auto table = ASSERT_RESULT(CreateTable(&test_cluster_, kNamespaceName, kTableName, num_tablets));
+  google::protobuf::RepeatedPtrField<master::TabletLocationsPB> tablets;
+  ASSERT_OK(test_client()->GetTablets(
+      table, 0, &tablets,
+      /* partition_list_version =*/nullptr));
+  ASSERT_EQ(tablets.size(), num_tablets);
+
+  std::string table_id = ASSERT_RESULT(GetTableId(&test_cluster_, kNamespaceName, kTableName));
+  xrepl::StreamId stream_id = ASSERT_RESULT(CreateConsistentSnapshotStream());
+
+  int num_txns = 10;
+  int num_inserts_per_txn = 100;
+  for (int i = 0; i < num_txns; i++) {
+    ASSERT_OK(WriteRowsHelper(
+        i * num_inserts_per_txn /* start */,
+        (i * num_inserts_per_txn) + num_inserts_per_txn /* end */, &test_cluster_, true));
+    ASSERT_OK(WaitForFlushTables(
+        {table.table_id()}, /* add_indexes = */ false, /* timeout_secs = */ 100,
+        /* is_compaction = */ false));
+  }
+
+  // uint64_t initial_intent_sst_files =
+  const uint32_t expected_records_size = num_txns * num_inserts_per_txn;
+  // for (const auto& tablet : tablets) {
+  //   for (size_t i = 0; i < test_cluster()->num_tablet_servers(); ++i) {
+  //     for (const auto& tablet_peer : test_cluster()->GetTabletPeers(i)) {
+  //       if (tablet_peer->tablet_id() == tablet.tablet_id()) {
+  //         tablet_peer->shared_tablet_safe()->get()->GetCurrentVersionNumSSTFiles();
+  //       }
+  //     }
+  //   }
+  // }
+
+  SleepFor(MonoDelta::FromSeconds(5));
+  // Count intents here, they should be 0 here.
+  int64 intents_count = 0;
+  for (int i = 0; i < num_tservers; ++i) {
+    ASSERT_OK(GetIntentCounts(i, &intents_count));
+  }
+  LOG(INFO) <<"sid: initial intent count: " << intents_count;
+
+  std::map<TabletId, CDCSDKCheckpointPB> tablet_to_checkpoint;
+  auto received_records = ASSERT_RESULT(GetChangeRecordCount(
+      stream_id, table, tablets, tablet_to_checkpoint, expected_records_size, true));
+  LOG(INFO) << "Got " << received_records << " insert records";
+  ASSERT_EQ(expected_records_size, received_records);
+
+  LOG(INFO) << "Final intent count after sleep of 5 secs: ";
+  SleepFor(MonoDelta::FromSeconds(10));
+  for (int i = 0; i < num_tservers; ++i) {
+    ASSERT_OK(GetIntentCounts(i, &intents_count));
+  }
+  LOG(INFO) << "sid: final intent count: " << intents_count;
+}
+
 }  // namespace cdc
 }  // namespace yb
