@@ -10787,7 +10787,7 @@ TEST_F(CDCSDKYsqlTest, TestConsumptionWithLongIntentRetention) {
   int num_tservers = 1;
   google::SetVLOGLevel("cdc_service*", 2);
   google::SetVLOGLevel("transaction_participant*", 2);
-  google::SetVLOGLevel("tablet*", 4);
+  google::SetVLOGLevel("tablet*", 1);
   ASSERT_OK(SetUpWithParams(num_tservers, 1, false));
 
   auto num_tablets = 1;

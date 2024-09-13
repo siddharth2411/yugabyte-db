@@ -1030,6 +1030,7 @@ Status Tablet::OpenKeyValueTablet() {
   if (transaction_participant_) {
     // We need to set the "cdc_sdk_min_checkpoint_op_id" so that intents don't get
     // garbage collected after transactions are loaded.
+    VLOG_WITH_PREFIX_AND_FUNC(1) << "Passing invalid for min_start_ht_among_cdcsdk_interested_txns";
     transaction_participant_->SetIntentRetainOpIdAndTime(
         metadata_->cdc_sdk_min_checkpoint_op_id(),
         MonoDelta::FromMilliseconds(GetAtomicFlag(&FLAGS_cdc_intent_retention_ms)),
@@ -1170,7 +1171,7 @@ void Tablet::DoCleanupIntentFiles() {
           transaction_participant_->GetMinStartHTAmongCDCSDKInterestedTxns();
       if (!min_start_ht_cdcsdk_interested_txns.is_valid() ||
           min_start_ht_cdcsdk_interested_txns <= best_file_max_ht) {
-        VLOG_WITH_PREFIX_AND_FUNC(4)
+        VLOG_WITH_PREFIX_AND_FUNC(1)
             << "Cannot delete because of CDC, min_start_ht_cdcsdk_interested_txns: "
             << min_start_ht_cdcsdk_interested_txns << ", best file max ht: " << best_file_max_ht;
         break;
@@ -2295,6 +2296,8 @@ Status Tablet::SetAllCDCRetentionBarriersUnlocked(
     if (txn_participant) {
 
       VLOG_WITH_PREFIX(1) << "Intents opid retention duration = " << cdc_sdk_op_id_expiration;
+      VLOG_WITH_PREFIX_AND_FUNC(1) << "Passing " << min_start_ht_among_cdcsdk_interested_txns
+                                   << " for min_start_ht_among_cdcsdk_interested_txns";
       txn_participant->SetIntentRetainOpIdAndTime(
           cdc_sdk_intents_op_id, cdc_sdk_op_id_expiration,
           min_start_ht_among_cdcsdk_interested_txns);

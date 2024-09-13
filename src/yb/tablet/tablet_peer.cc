@@ -1245,6 +1245,8 @@ Status TabletPeer::SetCDCSDKRetainOpIdAndTime(
       Log* log = log_atomic_.load(std::memory_order_acquire);
       auto min_start_ht_among_cdcsdk_interested_txns =
           tablet_->GetMinStartHTAmongCDCSDKInterestedTxns(log);
+      VLOG_WITH_PREFIX_AND_FUNC(1) << "Passing " << min_start_ht_among_cdcsdk_interested_txns
+                                   << " as min_start_ht_among_cdcsdk_interested_txns";
 
       txn_participant->SetIntentRetainOpIdAndTime(
           cdc_sdk_op_id, cdc_sdk_op_id_expiration, min_start_ht_among_cdcsdk_interested_txns);
