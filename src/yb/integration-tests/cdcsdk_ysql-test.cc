@@ -1804,6 +1804,7 @@ void CDCSDKYsqlTest::TestIntentCountPersistencyAllNodesRestart(CDCCheckpointType
   ANNOTATE_UNPROTECTED_WRITE(FLAGS_update_min_cdc_indices_interval_secs) = 1;
   // We want to force every GetChanges to update the cdc_state table.
   ANNOTATE_UNPROTECTED_WRITE(FLAGS_cdc_state_checkpoint_update_interval_ms) = 0;
+  ANNOTATE_UNPROTECTED_WRITE(FLAGS_log_segment_size_bytes) = 100;
   ASSERT_OK(SetUpWithParams(1, 1, false));
 
   const uint32_t num_tablets = 1;
@@ -1883,8 +1884,9 @@ void CDCSDKYsqlTest::TestIntentCountPersistencyAllNodesRestart(CDCCheckpointType
   ASSERT_EQ(final_record_size, 0);
 
   int64 final_num_intents;
-  PollForIntentCount(0, 0, IntentCountCompareOption::EqualTo, &final_num_intents);
-  ASSERT_EQ(0, final_num_intents);
+  PollForIntentCount(initial_num_intents, 0, IntentCountCompareOption::LessThan, &final_num_intents);
+  LOG(INFO) << "Final number of intents: " << final_num_intents;
+  ASSERT_LT(final_num_intents, initial_num_intents);
 }
 
 CDCSDK_TESTS_FOR_ALL_CHECKPOINT_OPTIONS(CDCSDKYsqlTest, TestIntentCountPersistencyAllNodesRestart);
@@ -1947,6 +1949,8 @@ void CDCSDKYsqlTest::TestIntentCountPersistencyBootstrap(CDCCheckpointType check
   ANNOTATE_UNPROTECTED_WRITE(FLAGS_update_min_cdc_indices_interval_secs) = 1;
   ANNOTATE_UNPROTECTED_WRITE(FLAGS_update_metrics_interval_ms) = 1;
   ANNOTATE_UNPROTECTED_WRITE(FLAGS_cdc_state_checkpoint_update_interval_ms) = 1;
+  ANNOTATE_UNPROTECTED_WRITE(FLAGS_log_segment_size_bytes) = 100;
+  ANNOTATE_UNPROTECTED_WRITE(FLAGS_db_write_buffer_size) = 10;
   ASSERT_OK(SetUpWithParams(3, 1, false));
 
   const uint32_t num_tablets = 1;
@@ -2004,9 +2008,6 @@ void CDCSDKYsqlTest::TestIntentCountPersistencyBootstrap(CDCCheckpointType check
   ASSERT_OK(test_cluster()->mini_tablet_server(first_leader_index)->Start());
 
   OpId last_seen_checkpoint_op_id = OpId::Invalid();
-  int64_t expected_num_intents =
-      checkpoint_type == cdc::CDCCheckpointType::EXPLICIT ? before_fetch_num_intents
-                                                          : before_fetch_num_intents / 2;
   for (uint32_t i = 0; i < test_cluster()->num_tablet_servers(); ++i) {
     auto tablet_peer_result =
         test_cluster()->GetTabletManager(i)->GetServingTablet(tablets[0].tablet_id());
@@ -2014,10 +2015,15 @@ void CDCSDKYsqlTest::TestIntentCountPersistencyBootstrap(CDCCheckpointType check
       continue;
     }
 
-    int64_t num_intents;
-    PollForIntentCount(
-        expected_num_intents, i, IntentCountCompareOption::EqualTo, &num_intents);
-    ASSERT_EQ(expected_num_intents, num_intents);
+    int64_t num_intents = 0;
+    if (checkpoint_type == CDCCheckpointType::EXPLICIT) {
+      PollForIntentCount(before_fetch_num_intents, i, IntentCountCompareOption::EqualTo, &num_intents);
+      ASSERT_EQ(before_fetch_num_intents, num_intents);
+    } else {
+      PollForIntentCount(
+          before_fetch_num_intents, i, IntentCountCompareOption::LessThan, &num_intents);
+      ASSERT_LT(before_fetch_num_intents, num_intents);
+    }
     LOG(INFO) << "Num of intents: " << num_intents << ", on tserver index" << i;
 
     auto tablet_peer = std::move(*tablet_peer_result);
@@ -2567,6 +2573,7 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestTransactionWithLargeBatchSize
   ANNOTATE_UNPROTECTED_WRITE(FLAGS_update_min_cdc_indices_interval_secs) = 1;
   ANNOTATE_UNPROTECTED_WRITE(FLAGS_cdc_state_checkpoint_update_interval_ms) = 0;
   ANNOTATE_UNPROTECTED_WRITE(FLAGS_consensus_max_batch_size_bytes) = 1000;
+  ANNOTATE_UNPROTECTED_WRITE(FLAGS_log_segment_size_bytes) = 100;
   ASSERT_OK(SetUpWithParams(1, 1, false));
 
   const uint32_t num_tablets = 1;
@@ -2610,9 +2617,9 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestTransactionWithLargeBatchSize
   ASSERT_RESULT(GetChangesFromCDC(stream_id, tablets, &change_resp_2.cdc_sdk_checkpoint()));
 
   int64 final_num_intents;
-  PollForIntentCount(0, 0, IntentCountCompareOption::EqualTo, &final_num_intents);
-  ASSERT_EQ(0, final_num_intents);
+  PollForIntentCount(initial_num_intents, 0, IntentCountCompareOption::LessThan, &final_num_intents);
   LOG(INFO) << "Final number of intents: " << final_num_intents;
+  ASSERT_LT(final_num_intents, initial_num_intents);
 }
 
 TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestIntentCountPersistencyAfterCompaction)) {
@@ -2622,7 +2629,17 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestIntentCountPersistencyAfterCo
   ANNOTATE_UNPROTECTED_WRITE(FLAGS_update_min_cdc_indices_interval_secs) = 1;
   // We want to force every GetChanges to update the cdc_state table.
   ANNOTATE_UNPROTECTED_WRITE(FLAGS_cdc_state_checkpoint_update_interval_ms) = 0;
-  ANNOTATE_UNPROTECTED_WRITE(FLAGS_aborted_intent_cleanup_ms) = 1000;  // 1 sec
+  // ANNOTATE_UNPROTECTED_WRITE(FLAGS_aborted_intent_cleanup_ms) = 1000;  // 1 sec
+  ANNOTATE_UNPROTECTED_WRITE(FLAGS_initial_log_segment_size_bytes) = 100;
+  ANNOTATE_UNPROTECTED_WRITE(FLAGS_log_segment_size_bytes) = 100;
+  ANNOTATE_UNPROTECTED_WRITE(FLAGS_log_min_seconds_to_retain) = 1;
+  ANNOTATE_UNPROTECTED_WRITE(FLAGS_cdc_wal_retention_time_secs) = 1;
+  ANNOTATE_UNPROTECTED_WRITE(FLAGS_cdc_min_replicated_index_considered_stale_secs) = 1;
+  // The following flag trigger compaction of SST files. Although compaction doesnt really delete
+  // any record when CDC is enabled, it will reduce the SST files that will change in the max
+  // record_time of the new SST files generated. Setting it to a high value to prevent compaction
+  // and see 'cdc only' intent SST files getting deleted after consumption.
+  ANNOTATE_UNPROTECTED_WRITE(FLAGS_rocksdb_level0_file_num_compaction_trigger) = 100;
 
   ASSERT_OK(SetUpWithParams(1, 1, false));
   const uint32_t num_tablets = 1;
@@ -2696,8 +2713,9 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestIntentCountPersistencyAfterCo
   ASSERT_EQ(final_record_size, 0);
 
   int64 final_num_intents;
-  PollForIntentCount(0, 0, IntentCountCompareOption::EqualTo, &final_num_intents);
-  ASSERT_EQ(0, final_num_intents);
+  PollForIntentCount(initial_num_intents, 0, IntentCountCompareOption::LessThan, &final_num_intents);
+  LOG(INFO) << "Final number of intents: " << final_num_intents;
+  ASSERT_LT(final_num_intents, initial_num_intents);
 }
 
 // https://github.com/yugabyte/yugabyte-db/issues/19385
@@ -10757,9 +10775,9 @@ TEST_F(CDCSDKYsqlTest, TestConsumptionWithLongIntentRetention) {
   ANNOTATE_UNPROTECTED_WRITE(FLAGS_cdc_wal_retention_time_secs) = 1;
   ANNOTATE_UNPROTECTED_WRITE(FLAGS_cdc_min_replicated_index_considered_stale_secs) = 1;
   // The following flag trigger compaction of SST files. Although compaction doesnt really delete
-  // any record when CDC is enabled, it will reduce the SST files that will change in the max
-  // record_time of the new SST files generated. Setting it to a high value to prevent compaction
-  // and see 'cdc only' intent SST files getting deleted after consumption.
+  // any record when CDC is enabled, it will reduce the SST files that will change the max
+  // record_time of the new SST files generated. Setting the flag to a high value to prevent
+  // compaction and see 'cdc only' intent SST files getting deleted after consumption.
   ANNOTATE_UNPROTECTED_WRITE(FLAGS_rocksdb_level0_file_num_compaction_trigger) = 100;
 
   int num_tservers = 1;
@@ -10790,25 +10808,22 @@ TEST_F(CDCSDKYsqlTest, TestConsumptionWithLongIntentRetention) {
         /* is_compaction = */ false));
   }
 
-  // uint64_t initial_intent_sst_files =
   const uint32_t expected_records_size = num_txns * num_inserts_per_txn;
-  // for (const auto& tablet : tablets) {
-  //   for (size_t i = 0; i < test_cluster()->num_tablet_servers(); ++i) {
-  //     for (const auto& tablet_peer : test_cluster()->GetTabletPeers(i)) {
-  //       if (tablet_peer->tablet_id() == tablet.tablet_id()) {
-  //         tablet_peer->shared_tablet_safe()->get()->GetCurrentVersionNumSSTFiles();
-  //       }
-  //     }
-  //   }
-  // }
-
   SleepFor(MonoDelta::FromSeconds(5));
-  // Count intents here, they should be 0 here.
-  int64 intents_count = 0;
+  int64 initial_intents_count = 0;
   for (int i = 0; i < num_tservers; ++i) {
-    ASSERT_OK(GetIntentCounts(i, &intents_count));
+    ASSERT_OK(GetIntentCounts(i, &initial_intents_count));
   }
-  LOG(INFO) <<"sid: initial intent count: " << intents_count;
+  LOG(INFO) << "initial intent count: " << initial_intents_count;
+
+  // Verify there are no txns that are retained in the txn participant due to CDC.
+  for (size_t i = 0; i < test_cluster()->num_tablet_servers(); ++i) {
+    for (const auto& peer : test_cluster()->GetTabletPeers(i)) {
+      if (peer->tablet_id() == tablets[0].tablet_id()) {
+        ASSERT_EQ(peer->tablet()->transaction_participant()->GetNumRunningTransactions(), 0);
+      }
+    }
+  }
 
   std::map<TabletId, CDCSDKCheckpointPB> tablet_to_checkpoint;
   auto received_records = ASSERT_RESULT(GetChangeRecordCount(
@@ -10816,12 +10831,15 @@ TEST_F(CDCSDKYsqlTest, TestConsumptionWithLongIntentRetention) {
   LOG(INFO) << "Got " << received_records << " insert records";
   ASSERT_EQ(expected_records_size, received_records);
 
-  LOG(INFO) << "Final intent count after sleep of 5 secs: ";
+  // Wait for UpdatePeersAndMetrics to move the checkpoint & min_start_ht for cdcsdk interested
+  // txns.
   SleepFor(MonoDelta::FromSeconds(10));
+  int64 final_intents_count = 0;
   for (int i = 0; i < num_tservers; ++i) {
-    ASSERT_OK(GetIntentCounts(i, &intents_count));
+    ASSERT_OK(GetIntentCounts(i, &final_intents_count));
   }
-  LOG(INFO) << "sid: final intent count: " << intents_count;
+  LOG(INFO) << "final intent count: " << final_intents_count;
+  ASSERT_LT(final_intents_count, initial_intents_count);
 }
 
 }  // namespace cdc

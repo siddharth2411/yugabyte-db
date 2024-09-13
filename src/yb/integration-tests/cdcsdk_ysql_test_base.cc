@@ -2425,6 +2425,8 @@ Result<string> CDCSDKYsqlTest::GetUniverseId(PostgresMiniCluster* cluster) {
               return (*num_intents >= min_expected_num_intents);
             case IntentCountCompareOption::EqualTo:
               return (*num_intents == min_expected_num_intents);
+            case IntentCountCompareOption::LessThan:
+              return (*num_intents < min_expected_num_intents);
           }
 
           return false;

@@ -131,6 +131,7 @@ DECLARE_int32(log_segment_size_mb);
 DECLARE_uint64(initial_log_segment_size_bytes);
 DECLARE_uint32(cdc_wal_retention_time_secs);
 DECLARE_int32(log_min_segments_to_retain);
+DECLARE_int64(db_write_buffer_size);
 
 namespace yb {
 
@@ -144,7 +145,7 @@ using rpc::RpcController;
 
 namespace cdc {
 
-YB_DEFINE_ENUM(IntentCountCompareOption, (GreaterThanOrEqualTo)(GreaterThan)(EqualTo));
+YB_DEFINE_ENUM(IntentCountCompareOption, (GreaterThanOrEqualTo)(GreaterThan)(EqualTo)(LessThan));
 YB_DEFINE_ENUM(OpIdExpectedValue, (MaxOpId)(InvalidOpId)(ValidNonMaxOpId));
 
 static constexpr uint64_t kVWALSessionId1 = std::numeric_limits<uint64_t>::max() / 2;
