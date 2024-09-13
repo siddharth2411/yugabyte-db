@@ -1414,17 +1414,34 @@ Status Log::GetSegmentsToGCUnlocked(int64_t min_op_idx, SegmentSequence* segment
   RETURN_NOT_OK(reader_->GetSegmentPrefixNotIncluding(
       min_op_idx, xrepl_min_replicated_index, segments_to_gc));
 
+  // Find the max consistent stream safe time from the segments that are available for GC.
   if (segments_to_gc->size() > 0) {
-    // Read the consistent stream safe time for the last segment that can be cleaned up.
-    const ReadableLogSegmentPtr& last_segment_available_for_gc =
-        VERIFY_RESULT(segments_to_gc->back());
-    if (last_segment_available_for_gc->footer().has_consistent_stream_safe_time()) {
-      auto consistent_stream_safe_time =
-          last_segment_available_for_gc->footer().consistent_stream_safe_time();
-      LOG_WITH_PREFIX(INFO) << "setting max_stream_safe_time_from_gc_segments to "
-                            << consistent_stream_safe_time;
-      stream_safe_time_from_gc_segments_.store(
-          consistent_stream_safe_time, std::memory_order_release);
+    HybridTime max_consistent_stream_safe_time = HybridTime::kMin;
+    for (const auto& segment : *segments_to_gc) {
+      if (segment->footer().has_consistent_stream_safe_time()) {
+        HybridTime curr_segment_stream_safe_time =
+            HybridTime(segment->footer().consistent_stream_safe_time());
+        VLOG_WITH_PREFIX(1) << "Current segment's csst HT: " << curr_segment_stream_safe_time << "("
+                            << curr_segment_stream_safe_time.ToUint64() << ")"
+                            << ", max_consistent_stream_safe_time HT: "
+                            << max_consistent_stream_safe_time << "("
+                            << max_consistent_stream_safe_time.ToUint64() << ")";
+        if (curr_segment_stream_safe_time.is_valid() && 
+            curr_segment_stream_safe_time > max_consistent_stream_safe_time) {
+          max_consistent_stream_safe_time = curr_segment_stream_safe_time;
+        }
+      }
+    }
+
+    HybridTime curr_max_consistent_stream_safe_time =
+        GetMaxConsistentStreamSafeHTFromGCSegments();
+    if (max_consistent_stream_safe_time != HybridTime::kMin &&
+        (!curr_max_consistent_stream_safe_time.is_valid() ||
+         curr_max_consistent_stream_safe_time < max_consistent_stream_safe_time)) {
+      LOG_WITH_PREFIX(INFO) << "Setting max_consistent_stream_safe_ht_from_gc_segments_ to "
+                            << max_consistent_stream_safe_time;
+      max_consistent_stream_safe_ht_from_gc_segments_.store(
+          max_consistent_stream_safe_time, std::memory_order_release);
     }
   }
 
@@ -2144,8 +2161,8 @@ Status Log::ResetLastSyncedEntryOpId(const OpId& op_id) {
   return Status::OK();
 }
 
-uint64_t Log::GetStreamSafeTimeFromGCSegments() const {
-  return stream_safe_time_from_gc_segments_.load(std::memory_order_acquire);
+HybridTime Log::GetMaxConsistentStreamSafeHTFromGCSegments() const {
+  return max_consistent_stream_safe_ht_from_gc_segments_.load(std::memory_order_acquire);
 }
 
 Log::~Log() {

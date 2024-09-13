@@ -48,6 +48,7 @@
 #include "yb/ash/wait_state_fwd.h"
 
 #include "yb/common/common_fwd.h"
+#include "yb/common/hybrid_time.h"
 #include "yb/common/opid.h"
 
 #include "yb/consensus/consensus_fwd.h"
@@ -353,7 +354,7 @@ class Log : public RefCountedThreadSafe<Log> {
     }
   }
 
-  uint64_t GetStreamSafeTimeFromGCSegments() const;
+  HybridTime GetMaxConsistentStreamSafeHTFromGCSegments() const;
 
  private:
   friend class LogTest;
@@ -678,8 +679,10 @@ class Log : public RefCountedThreadSafe<Log> {
   // Consistent stream safe time for current log
   std::atomic<uint64_t> consistent_stream_safe_time_{0};
 
-  // Stores the consistent_stream_safe_time of the latest WAL segment that is available for GC.
-  mutable std::atomic<uint64_t> stream_safe_time_from_gc_segments_{0};
+  // Stores the maximum valid consistent_stream_safe_time from WAL segments that are
+  // available for GC.
+  mutable std::atomic<HybridTime> max_consistent_stream_safe_ht_from_gc_segments_ =
+      HybridTime::kInvalid;
 
   // The current replicated index that CDC has read.  Used for CDC read cache optimization.
   std::atomic<int64_t> cdc_min_replicated_index_{std::numeric_limits<int64_t>::max()};

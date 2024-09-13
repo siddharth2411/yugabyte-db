@@ -539,19 +539,23 @@ class TransactionParticipant::Impl
     VLOG(1) << "Setting RetainOpId: " << op_id
             << ", previous cdc_sdk_min_checkpoint_op_id_: " << cdc_sdk_min_checkpoint_op_id_;
 
-    VLOG(1) << "Setting min_start_ht_among_cdcsdk_interested_txns: "
-            << min_start_ht_among_cdcsdk_interested_txns
-            << ", previous min_start_ht_among_cdcsdk_interested_txns: "
-            << min_start_ht_among_cdcsdk_interested_txns_;
-
     cdc_sdk_min_checkpoint_op_id_expiration_ = CoarseMonoClock::now() + cdc_sdk_op_id_expiration;
     cdc_sdk_min_checkpoint_op_id_ = op_id;
-    min_start_ht_among_cdcsdk_interested_txns_ = min_start_ht_among_cdcsdk_interested_txns;
 
-    // If new op_id same as  cdc_sdk_min_checkpoint_op_id_ it means already intent before it are
-    // already cleaned up, so no need call clean transactions, else call clean the transactions.
-    CleanTransactionsUnlocked(&min_running_notifier);
-  }
+    if (min_start_ht_among_cdcsdk_interested_txns.is_valid() &&
+        (!min_start_ht_among_cdcsdk_interested_txns_.is_valid() ||
+         min_start_ht_among_cdcsdk_interested_txns_ < min_start_ht_among_cdcsdk_interested_txns)) {
+      VLOG(1) << "Setting min_start_ht_among_cdcsdk_interested_txns: "
+              << min_start_ht_among_cdcsdk_interested_txns
+              << ", previous min_start_ht_among_cdcsdk_interested_txns: "
+              << min_start_ht_among_cdcsdk_interested_txns_;
+      min_start_ht_among_cdcsdk_interested_txns_ = min_start_ht_among_cdcsdk_interested_txns;
+    }
+
+      // If new op_id same as  cdc_sdk_min_checkpoint_op_id_ it means already intent before it are
+      // already cleaned up, so no need call clean transactions, else call clean the transactions.
+      CleanTransactionsUnlocked(&min_running_notifier);
+    }
 
   OpId GetLatestCheckPoint() EXCLUDES(mutex_) {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -2217,6 +2221,8 @@ class TransactionParticipant::Impl
   std::atomic<OpId> historical_max_op_id = OpId::Invalid();
   CoarseTimePoint cdc_sdk_min_checkpoint_op_id_expiration_ = CoarseTimePoint::min();
 
+  // Time up to which intents SST files can be safely deleted, provided the maximum record time in
+  // the SST file is earlier than this value.
   HybridTime min_start_ht_among_cdcsdk_interested_txns_{HybridTime::kInvalid};
 
   std::condition_variable requests_completed_cond_;

@@ -1170,9 +1170,9 @@ void Tablet::DoCleanupIntentFiles() {
           transaction_participant_->GetMinStartHTAmongCDCSDKInterestedTxns();
       if (!min_start_ht_cdcsdk_interested_txns.is_valid() ||
           min_start_ht_cdcsdk_interested_txns <= best_file_max_ht) {
-        LOG(INFO) << "Cannot delete because of CDC, min_start_ht_cdcsdk_interested_txns: "
-                  << min_start_ht_cdcsdk_interested_txns
-                  << ", best file max ht: " << best_file_max_ht;
+        VLOG_WITH_PREFIX_AND_FUNC(4)
+            << "Cannot delete because of CDC, min_start_ht_cdcsdk_interested_txns: "
+            << min_start_ht_cdcsdk_interested_txns << ", best file max ht: " << best_file_max_ht;
         break;
       }
     }
@@ -2289,6 +2289,8 @@ Status Tablet::SetAllCDCRetentionBarriersUnlocked(
     // Intents Retention setting on txn_participant
     // 1. cdc_sdk_intents_op_id - opid beyond which GC will not happen
     // 2. cdc_sdk_op_id_expiration - time limit upto which intents barrier setting holds
+    // 3. min_start_ht_among_cdcsdk_interested_txns - time up to which intents SST files can be
+    // deleted, provided their maximum record time is earlier than this value.
     auto txn_participant = transaction_participant();
     if (txn_participant) {
 
@@ -2394,13 +2396,10 @@ Result<bool> Tablet::MoveForwardAllCDCRetentionBarriers(
 
 HybridTime Tablet::GetMinStartHTAmongCDCSDKInterestedTxns(log::Log* log) const {
   if (log) {
-    HybridTime min_start_ht_cdcsdk_interested_txns =
-        HybridTime(log->GetStreamSafeTimeFromGCSegments());
-    if (min_start_ht_cdcsdk_interested_txns != HybridTime::kInvalid) {
-      return min_start_ht_cdcsdk_interested_txns;
-    }
+    return log->GetMaxConsistentStreamSafeHTFromGCSegments();
   }
 
+  VLOG_WITH_PREFIX_AND_FUNC(1) << "log is null, returning invalid as min_start_ht_cdcsdk_interested_txns";
   return HybridTime::kInvalid;
 }
 
