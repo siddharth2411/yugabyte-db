@@ -1426,7 +1426,7 @@ Status Log::GetSegmentsToGCUnlocked(int64_t min_op_idx, SegmentSequence* segment
                             << ", max_consistent_stream_safe_time HT: "
                             << max_consistent_stream_safe_time << "("
                             << max_consistent_stream_safe_time.ToUint64() << ")";
-        if (curr_segment_stream_safe_time.is_valid() && 
+        if (curr_segment_stream_safe_time.is_valid() &&
             curr_segment_stream_safe_time > max_consistent_stream_safe_time) {
           max_consistent_stream_safe_time = curr_segment_stream_safe_time;
         }

@@ -1884,7 +1884,8 @@ void CDCSDKYsqlTest::TestIntentCountPersistencyAllNodesRestart(CDCCheckpointType
   ASSERT_EQ(final_record_size, 0);
 
   int64 final_num_intents;
-  PollForIntentCount(initial_num_intents, 0, IntentCountCompareOption::LessThan, &final_num_intents);
+  PollForIntentCount(
+      initial_num_intents, 0, IntentCountCompareOption::LessThan, &final_num_intents);
   LOG(INFO) << "Final number of intents: " << final_num_intents;
   ASSERT_LT(final_num_intents, initial_num_intents);
 }
@@ -2017,7 +2018,8 @@ void CDCSDKYsqlTest::TestIntentCountPersistencyBootstrap(CDCCheckpointType check
 
     int64_t num_intents = 0;
     if (checkpoint_type == CDCCheckpointType::EXPLICIT) {
-      PollForIntentCount(before_fetch_num_intents, i, IntentCountCompareOption::EqualTo, &num_intents);
+      PollForIntentCount(
+          before_fetch_num_intents, i, IntentCountCompareOption::EqualTo, &num_intents);
       ASSERT_EQ(before_fetch_num_intents, num_intents);
     } else {
       PollForIntentCount(
@@ -2617,7 +2619,8 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestTransactionWithLargeBatchSize
   ASSERT_RESULT(GetChangesFromCDC(stream_id, tablets, &change_resp_2.cdc_sdk_checkpoint()));
 
   int64 final_num_intents;
-  PollForIntentCount(initial_num_intents, 0, IntentCountCompareOption::LessThan, &final_num_intents);
+  PollForIntentCount(
+      initial_num_intents, 0, IntentCountCompareOption::LessThan, &final_num_intents);
   LOG(INFO) << "Final number of intents: " << final_num_intents;
   ASSERT_LT(final_num_intents, initial_num_intents);
 }
@@ -2713,7 +2716,8 @@ TEST_F(CDCSDKYsqlTest, YB_DISABLE_TEST_IN_TSAN(TestIntentCountPersistencyAfterCo
   ASSERT_EQ(final_record_size, 0);
 
   int64 final_num_intents;
-  PollForIntentCount(initial_num_intents, 0, IntentCountCompareOption::LessThan, &final_num_intents);
+  PollForIntentCount(
+      initial_num_intents, 0, IntentCountCompareOption::LessThan, &final_num_intents);
   LOG(INFO) << "Final number of intents: " << final_num_intents;
   ASSERT_LT(final_num_intents, initial_num_intents);
 }

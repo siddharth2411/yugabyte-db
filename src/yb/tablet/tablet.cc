@@ -2399,7 +2399,8 @@ HybridTime Tablet::GetMinStartHTAmongCDCSDKInterestedTxns(log::Log* log) const {
     return log->GetMaxConsistentStreamSafeHTFromGCSegments();
   }
 
-  VLOG_WITH_PREFIX_AND_FUNC(1) << "log is null, returning invalid as min_start_ht_cdcsdk_interested_txns";
+  VLOG_WITH_PREFIX_AND_FUNC(1)
+      << "log is null, returning invalid as min_start_ht_cdcsdk_interested_txns";
   return HybridTime::kInvalid;
 }
 
