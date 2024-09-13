@@ -380,6 +380,9 @@ class ReadableLogSegment : public RefCountedThreadSafe<ReadableLogSegment> {
   // UpdateReadableToOffset().
   std::atomic<int64_t> file_size_;
 
+  // Consistent stream safe time for current log
+  std::atomic<uint64_t> consistent_stream_safe_time_{0};
+
   // The offset up to which we can read the file.
   // Contains full size of the file, if the segment is closed and has a footer, or the offset where
   // the last written, non corrupt entry ends.

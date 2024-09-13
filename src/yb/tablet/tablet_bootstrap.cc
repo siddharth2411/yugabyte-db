@@ -82,6 +82,7 @@
 #include "yb/tablet/operations/update_txn_operation.h"
 #include "yb/tablet/operations/write_operation.h"
 #include "yb/tablet/snapshot_coordinator.h"
+#include "yb/tablet/abstract_tablet.h"
 #include "yb/tablet/tablet.h"
 #include "yb/tablet/tablet_bootstrap_state_manager.h"
 #include "yb/tablet/tablet_metadata.h"
@@ -847,6 +848,10 @@ class TabletBootstrap {
         metadata.IsLazySuperblockFlushEnabled()
             ? std::bind(&RaftGroupMetadata::Flush, tablet_->metadata(), OnlyIfDirty::kTrue)
             : noop;
+
+    log::ConsistentTimeCallback consistent_time_callback = {};
+    consistent_time_callback = std::bind(&Tablet::GetConsistentStreamSafeTime, tablet_);
+
     RETURN_NOT_OK(Log::Open(
         log_options,
         tablet_->tablet_id(),
@@ -862,7 +867,8 @@ class TabletBootstrap {
         &log_,
         data_.pre_log_rollover_callback,
         new_segment_allocation_callback,
-        create_new_segment));
+        create_new_segment,
+        consistent_time_callback));
     // Disable sync temporarily in order to speed up appends during the bootstrap process.
     log_->DisableSync();
     return Status::OK();

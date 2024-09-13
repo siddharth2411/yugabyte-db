@@ -37,6 +37,8 @@
 #include <mutex>
 #include <vector>
 
+#include "yb/common/hybrid_time.h"
+
 #include "yb/consensus/consensus.messages.h"
 #include "yb/consensus/consensus_util.h"
 #include "yb/consensus/log.h"
@@ -293,6 +295,57 @@ int64_t LogCache::earliest_op_index() const {
     ret = log_->GetMinReplicateIndex();
   }
   return ret;
+}
+
+Result<uint64_t> LogCache::GetConsistentStreamSafeTimeFromSegmentFooter(
+    const int64_t segment_number) const {
+  uint64_t consistent_stream_safe_time = 0;
+  const auto segment =
+      VERIFY_RESULT(log_->GetLogReader()->GetSegmentBySequenceNumber(segment_number));
+  if (!segment) {
+    return STATUS_FORMAT(NotFound, "Segment $0 not found", segment_number);
+  }
+
+  if (segment->HasFooter()) {
+    consistent_stream_safe_time = segment->footer().has_consistent_stream_safe_time()
+                                      ? segment->footer().consistent_stream_safe_time()
+                                      : 0;
+  } else {
+    // Currently active segment.
+    return log_->LoadConsistentStreamSafeTime();
+  }
+  // consistent_stream_safe_time will be 0 only when the segment has a footer without
+  // consistent_stream_safe_time_ stored in it. This can happen for segments from older db versions.
+  // In this case return HybridTime::kInitial.
+  return consistent_stream_safe_time != 0 ? consistent_stream_safe_time
+                                          : HybridTime::kInitial.ToUint64();
+}
+
+Result<int64_t> LogCache::GetMaxReplicateIndexFromSegmentFooter(
+    const int64_t segment_number) const {
+  int64_t segment_max_replicate_index = -1;
+  const auto segment =
+      VERIFY_RESULT(log_->GetLogReader()->GetSegmentBySequenceNumber(segment_number));
+  if (!segment) {
+    return STATUS_FORMAT(NotFound, "Segment $0 not found", segment_number);
+  }
+
+  if (segment->HasFooter()) {
+    segment_max_replicate_index =
+        segment->footer().has_max_replicate_index() ? segment->footer().max_replicate_index() : 0;
+  } else {
+    segment_max_replicate_index =
+        log_->GetMaxReplicateIndex() != -1 ? log_->GetMaxReplicateIndex() : 0;
+  }
+  return segment_max_replicate_index;
+}
+
+uint64_t LogCache::GetActiveSegmentNumber() const {
+  if (!log_) {
+    LOG(WARNING) << "log_ was null";
+    return 0;
+  }
+  return log_->active_segment_sequence_number();
 }
 
 bool LogCache::HasOpBeenWritten(int64_t index) const {

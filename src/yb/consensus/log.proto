@@ -134,4 +134,6 @@ message LogSegmentFooterPB {
   // Offset of the first index block. Absence means there is no log index stored in this log
   // segment.
   optional int64 index_start_offset = 5;
+  // stream safe time at the time of log segment rollover.
+  optional uint64 consistent_stream_safe_time = 6;
 }

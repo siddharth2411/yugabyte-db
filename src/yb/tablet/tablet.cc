@@ -1084,6 +1084,30 @@ void Tablet::CleanupIntentFiles() {
       "Submit cleanup intent files failed");
 }
 
+// Calls GetMinStartTimeAmongAllRunningTransactions() on transaction participant. If the result
+// obtained is invalid then returns leader safe time.
+HybridTime Tablet::GetConsistentStreamSafeTime() {
+  HybridTime consistent_stream_safe_time = HybridTime::kInvalid;
+  if (transaction_participant()) {
+    consistent_stream_safe_time =
+        transaction_participant()->GetMinStartTimeAmongAllRunningTransactions();
+  }
+
+  if (consistent_stream_safe_time != HybridTime::kInvalid) {
+    return consistent_stream_safe_time;
+  }
+
+  auto safe_time_result = SafeTime();
+  if (safe_time_result.ok() && *safe_time_result != HybridTime::kInvalid) {
+    consistent_stream_safe_time = *safe_time_result;
+  } else {
+    LOG_WITH_PREFIX(WARNING) << "Could not retrive a valid safe time so setting it to kInitial.";
+    consistent_stream_safe_time = HybridTime::kInitial;
+  }
+
+  return consistent_stream_safe_time;
+}
+
 void Tablet::DoCleanupIntentFiles() {
   if (metadata_->IsUnderXClusterReplication()) {
     VLOG_WITH_PREFIX_AND_FUNC(4) << "Exit because of xCluster replication";

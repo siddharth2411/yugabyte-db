@@ -114,6 +114,8 @@ YB_STRONGLY_TYPED_BOOL(SkipWalWrite);
 
 using NewSegmentAllocationCallback = std::function<Status(void)>;
 
+using ConsistentTimeCallback = std::function<HybridTime(void)>;
+
 // Log interface, inspired by Raft's (logcabin) Log. Provides durability to YugaByte as a normal
 // Write Ahead Log and also plays the role of persistent storage for the consensus state machine.
 //
@@ -156,7 +158,8 @@ class Log : public RefCountedThreadSafe<Log> {
                              scoped_refptr<Log> *log,
                              const PreLogRolloverCallback& pre_log_rollover_callback = {},
                              NewSegmentAllocationCallback callback = {},
-                             CreateNewSegment create_new_segment = CreateNewSegment::kTrue);
+                             CreateNewSegment create_new_segment = CreateNewSegment::kTrue,
+                             ConsistentTimeCallback consistent_time_callback = {});
 
   ~Log();
 
@@ -229,6 +232,10 @@ class Log : public RefCountedThreadSafe<Log> {
   OpId GetLatestEntryOpId() const;
 
   int64_t GetMinReplicateIndex() const;
+
+  int64_t GetMaxReplicateIndex() const;
+
+  uint64_t LoadConsistentStreamSafeTime() const;
 
   // Runs the garbage collector on the set of previous segments. Segments that only refer to in-mem
   // state that has been flushed are candidates for garbage collection.
@@ -382,7 +389,8 @@ class Log : public RefCountedThreadSafe<Log> {
       ThreadPool* background_sync_threadpool,
       NewSegmentAllocationCallback callback,
       const PreLogRolloverCallback& pre_log_rollover_callback,
-      CreateNewSegment create_new_segment = CreateNewSegment::kTrue);
+      CreateNewSegment create_new_segment = CreateNewSegment::kTrue,
+      ConsistentTimeCallback consistent_time_callback = {});
 
   Env* get_env() {
     return options_.env;
@@ -661,6 +669,13 @@ class Log : public RefCountedThreadSafe<Log> {
   // Minimum replicate index for the current log being written. Used for CDC read initialization.
   std::atomic<int64_t> min_replicate_index_{-1};
 
+  // Maximum replicate index for the current log being written. Used by CDC GetChanges to know when
+  // a segment has ended
+  std::atomic<int64_t> max_replicate_index_{-1};
+
+  // Consistent stream safe time for current log
+  std::atomic<uint64_t> consistent_stream_safe_time_{0};
+
   // The current replicated index that CDC has read.  Used for CDC read cache optimization.
   std::atomic<int64_t> cdc_min_replicated_index_{std::numeric_limits<int64_t>::max()};
 
@@ -681,6 +696,7 @@ class Log : public RefCountedThreadSafe<Log> {
   std::atomic<bool> has_free_disk_space_{false};
   std::atomic<uint32> disk_space_frequent_check_interval_sec_{0};
   std::shared_timed_mutex disk_space_mutex_;
+  ConsistentTimeCallback consistent_time_callback_;
 
   // Protect access to the get_xcluster_min_index_to_retain_.
   mutable PerCpuRwMutex get_xcluster_index_lock_;
