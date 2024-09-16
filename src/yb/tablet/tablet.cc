@@ -1165,10 +1165,10 @@ void Tablet::DoCleanupIntentFiles() {
       break;
     }
 
+    auto min_start_ht_cdcsdk_interested_txns =
+        transaction_participant_->GetMinStartHTAmongCDCSDKInterestedTxns();
     if (GetAtomicFlag(&FLAGS_cdc_immediate_transaction_cleanup) &&
         metadata_->is_under_cdc_sdk_replication()) {
-      auto min_start_ht_cdcsdk_interested_txns =
-          transaction_participant_->GetMinStartHTAmongCDCSDKInterestedTxns();
       if (!min_start_ht_cdcsdk_interested_txns.is_valid() ||
           min_start_ht_cdcsdk_interested_txns <= best_file_max_ht) {
         VLOG_WITH_PREFIX_AND_FUNC(1)
@@ -1186,8 +1186,9 @@ void Tablet::DoCleanupIntentFiles() {
 
     LOG_WITH_PREFIX_AND_FUNC(INFO)
         << "Intents SST file will be deleted: " << best_file->ToString()
-        << ", max ht: " << best_file_max_ht << ", min running transaction start ht: "
-        << min_running_start_ht;
+        << ", max ht: " << best_file_max_ht
+        << ", min running transaction start ht: " << min_running_start_ht
+        << ", min_start_ht_cdcsdk_interested_txns: " << min_start_ht_cdcsdk_interested_txns;
     auto flush_status = regular_db_->Flush(rocksdb::FlushOptions());
     if (!flush_status.ok()) {
       LOG_WITH_PREFIX_AND_FUNC(WARNING) << "Failed to flush regular db: " << flush_status;

@@ -1439,7 +1439,9 @@ Status Log::GetSegmentsToGCUnlocked(int64_t min_op_idx, SegmentSequence* segment
         (!curr_max_consistent_stream_safe_time.is_valid() ||
          curr_max_consistent_stream_safe_time < max_consistent_stream_safe_time)) {
       LOG_WITH_PREFIX(INFO) << "Setting max_consistent_stream_safe_ht_from_gc_segments_ to "
-                            << max_consistent_stream_safe_time;
+                            << max_consistent_stream_safe_time
+                            << ", previous max_consistent_stream_safe_ht_from_gc_segments_: "
+                            << curr_max_consistent_stream_safe_time;
       max_consistent_stream_safe_ht_from_gc_segments_.store(
           max_consistent_stream_safe_time, std::memory_order_release);
     }
