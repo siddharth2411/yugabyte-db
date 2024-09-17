@@ -292,11 +292,6 @@ DEFINE_test_flag(uint64, inject_sleep_before_applying_intents_ms, 0,
 DEFINE_test_flag(bool, skip_remove_intent, false,
                  "If true, remove intent will be skipped");
 
-DEFINE_test_flag(bool, cdc_immediate_transaction_cleanup_cleanup_intent_files, false,
-                 "Do intent SST file cleanup even when cdc_immediate_transaction_cleanup is on. "
-                 "This can cause data loss (#22227) but we don't run into that issue during some "
-                 "unit tests.");
-
 DECLARE_bool(TEST_invalidate_last_change_metadata_op);
 
 using namespace std::placeholders;
@@ -1030,7 +1025,8 @@ Status Tablet::OpenKeyValueTablet() {
   if (transaction_participant_) {
     // We need to set the "cdc_sdk_min_checkpoint_op_id" so that intents don't get
     // garbage collected after transactions are loaded.
-    VLOG_WITH_PREFIX_AND_FUNC(1) << "Passing invalid for min_start_ht_among_cdcsdk_interested_txns";
+    // Passing HybridTime::kInvalid for "min_start_ht_among_cdcsdk_interested_txns" to prevent
+    // unintended cleanup of intent SST files.
     transaction_participant_->SetIntentRetainOpIdAndTime(
         metadata_->cdc_sdk_min_checkpoint_op_id(),
         MonoDelta::FromMilliseconds(GetAtomicFlag(&FLAGS_cdc_intent_retention_ms)),
@@ -1171,7 +1167,7 @@ void Tablet::DoCleanupIntentFiles() {
         metadata_->is_under_cdc_sdk_replication()) {
       if (!min_start_ht_cdcsdk_interested_txns.is_valid() ||
           min_start_ht_cdcsdk_interested_txns <= best_file_max_ht) {
-        VLOG_WITH_PREFIX_AND_FUNC(1)
+        VLOG_WITH_PREFIX_AND_FUNC(4)
             << "Cannot delete because of CDC, min_start_ht_cdcsdk_interested_txns: "
             << min_start_ht_cdcsdk_interested_txns << ", best file max ht: " << best_file_max_ht;
         break;
@@ -2297,8 +2293,8 @@ Status Tablet::SetAllCDCRetentionBarriersUnlocked(
     if (txn_participant) {
 
       VLOG_WITH_PREFIX(1) << "Intents opid retention duration = " << cdc_sdk_op_id_expiration;
-      VLOG_WITH_PREFIX_AND_FUNC(1) << "Passing " << min_start_ht_among_cdcsdk_interested_txns
-                                   << " for min_start_ht_among_cdcsdk_interested_txns";
+      VLOG_WITH_PREFIX_AND_FUNC(1) << "min_start_ht_among_cdcsdk_interested_txns from log: "
+                                   << min_start_ht_among_cdcsdk_interested_txns;
       txn_participant->SetIntentRetainOpIdAndTime(
           cdc_sdk_intents_op_id, cdc_sdk_op_id_expiration,
           min_start_ht_among_cdcsdk_interested_txns);
@@ -2404,7 +2400,7 @@ HybridTime Tablet::GetMinStartHTAmongCDCSDKInterestedTxns(log::Log* log) const {
   }
 
   VLOG_WITH_PREFIX_AND_FUNC(1)
-      << "log is null, returning invalid as min_start_ht_cdcsdk_interested_txns";
+      << "log not available, returning invalid HT for min_start_ht_cdcsdk_interested_txns";
   return HybridTime::kInvalid;
 }
 

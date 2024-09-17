@@ -545,10 +545,10 @@ class TransactionParticipant::Impl
     if (min_start_ht_among_cdcsdk_interested_txns.is_valid() &&
         (!min_start_ht_among_cdcsdk_interested_txns_.is_valid() ||
          min_start_ht_among_cdcsdk_interested_txns_ < min_start_ht_among_cdcsdk_interested_txns)) {
-      VLOG(1) << "Setting min_start_ht_among_cdcsdk_interested_txns: "
-              << min_start_ht_among_cdcsdk_interested_txns
-              << ", previous min_start_ht_among_cdcsdk_interested_txns: "
-              << min_start_ht_among_cdcsdk_interested_txns_;
+      VLOG_WITH_PREFIX(1) << "Setting min_start_ht_among_cdcsdk_interested_txns: "
+                          << min_start_ht_among_cdcsdk_interested_txns
+                          << ", previous min_start_ht_among_cdcsdk_interested_txns: "
+                          << min_start_ht_among_cdcsdk_interested_txns_;
       min_start_ht_among_cdcsdk_interested_txns_ = min_start_ht_among_cdcsdk_interested_txns;
     }
 

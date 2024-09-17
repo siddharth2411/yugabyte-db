@@ -680,7 +680,7 @@ class Log : public RefCountedThreadSafe<Log> {
   std::atomic<uint64_t> consistent_stream_safe_time_{0};
 
   // Stores the maximum valid consistent_stream_safe_time from WAL segments that are
-  // available for GC.
+  // available for GC based on opid's index.
   mutable std::atomic<HybridTime> max_consistent_stream_safe_ht_from_gc_segments_ =
       HybridTime::kInvalid;
 

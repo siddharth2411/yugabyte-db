@@ -1421,13 +1421,14 @@ Status Log::GetSegmentsToGCUnlocked(int64_t min_op_idx, SegmentSequence* segment
       if (segment->footer().has_consistent_stream_safe_time()) {
         HybridTime curr_segment_stream_safe_time =
             HybridTime(segment->footer().consistent_stream_safe_time());
-        VLOG_WITH_PREFIX(1) << "Current segment's csst HT: " << curr_segment_stream_safe_time << "("
-                            << curr_segment_stream_safe_time.ToUint64() << ")"
-                            << ", max_consistent_stream_safe_time HT: "
-                            << max_consistent_stream_safe_time << "("
-                            << max_consistent_stream_safe_time.ToUint64() << ")";
         if (curr_segment_stream_safe_time.is_valid() &&
             curr_segment_stream_safe_time > max_consistent_stream_safe_time) {
+          VLOG_WITH_PREFIX(3) << "Current segment's consistent_stream_safe_time HT: "
+                              << curr_segment_stream_safe_time << "("
+                              << curr_segment_stream_safe_time.ToUint64() << ")"
+                              << ", max_consistent_stream_safe_time HT in current batch: "
+                              << max_consistent_stream_safe_time << "("
+                              << max_consistent_stream_safe_time.ToUint64() << ")";
           max_consistent_stream_safe_time = curr_segment_stream_safe_time;
         }
       }
@@ -1438,7 +1439,7 @@ Status Log::GetSegmentsToGCUnlocked(int64_t min_op_idx, SegmentSequence* segment
     if (max_consistent_stream_safe_time != HybridTime::kMin &&
         (!curr_max_consistent_stream_safe_time.is_valid() ||
          curr_max_consistent_stream_safe_time < max_consistent_stream_safe_time)) {
-      LOG_WITH_PREFIX(INFO) << "Setting max_consistent_stream_safe_ht_from_gc_segments_ to "
+      VLOG_WITH_PREFIX(1) << "Setting max_consistent_stream_safe_ht_from_gc_segments_ to "
                             << max_consistent_stream_safe_time
                             << ", previous max_consistent_stream_safe_ht_from_gc_segments_: "
                             << curr_max_consistent_stream_safe_time;
