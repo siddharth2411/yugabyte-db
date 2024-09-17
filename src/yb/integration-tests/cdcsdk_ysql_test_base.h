@@ -127,11 +127,6 @@ DECLARE_bool(TEST_cdcsdk_disable_deleted_stream_cleanup);
 DECLARE_bool(cdcsdk_enable_cleanup_of_expired_table_entries);
 DECLARE_bool(TEST_cdcsdk_skip_processing_unqualified_tables);
 DECLARE_bool(TEST_cdcsdk_skip_table_removal_from_qualified_list);
-DECLARE_int32(log_segment_size_mb);
-DECLARE_uint64(initial_log_segment_size_bytes);
-DECLARE_uint32(cdc_wal_retention_time_secs);
-DECLARE_int32(log_min_segments_to_retain);
-DECLARE_int64(db_write_buffer_size);
 
 namespace yb {
 
