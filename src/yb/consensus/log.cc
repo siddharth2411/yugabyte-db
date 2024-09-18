@@ -1726,7 +1726,6 @@ Status Log::Close() {
       RETURN_NOT_OK(ReplaceSegmentInReaderUnlocked());
       // Re-assign the consistent_time_callback_ with an empty function so that the resources
       // (txn-participant) associated with the original callback can be released.
-      consistent_time_callback_ = {};
       log_state_ = kLogClosed;
       if (background_synchronizer_wait_state_) {
         yb::ash::RaftLogWaitStatesTracker().Untrack(background_synchronizer_wait_state_);

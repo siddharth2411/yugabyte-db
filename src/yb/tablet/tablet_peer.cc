@@ -1236,6 +1236,14 @@ Result<NamespaceId> TabletPeer::GetNamespaceId() {
   return namespace_id;
 }
 
+HybridTime TabletPeer::GetConsistentStreamSafeTime() {
+  if (tablet_) {
+    return tablet_->GetConsistentStreamSafeTime();
+  }
+
+  return HybridTime::kInitial;
+}
+
 Status TabletPeer::SetCDCSDKRetainOpIdAndTime(
     const OpId& cdc_sdk_op_id, const MonoDelta& cdc_sdk_op_id_expiration,
     const HybridTime& cdc_sdk_safe_time) {

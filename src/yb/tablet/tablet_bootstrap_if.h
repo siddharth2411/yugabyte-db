@@ -42,6 +42,7 @@
 
 #include "yb/common/opid.h"
 
+#include "yb/consensus/log.h"
 #include "yb/consensus/log_fwd.h"
 #include "yb/consensus/consensus_fwd.h"
 
@@ -178,6 +179,7 @@ struct BootstrapTabletData {
   bool bootstrap_retryable_requests = true;
   consensus::ConsensusMetadata* consensus_meta = nullptr;
   log::PreLogRolloverCallback pre_log_rollover_callback = {};
+  log::ConsistentTimeCallback consistent_time_callback = {};
 };
 
 // Bootstraps a tablet, initializing it with the provided metadata. If the tablet

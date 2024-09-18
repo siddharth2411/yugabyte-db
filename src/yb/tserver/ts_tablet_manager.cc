@@ -2041,23 +2041,31 @@ void TSTabletManager::OpenTablet(const RaftGroupMetadataPtr& meta,
             std::bind(&TabletServer::GetMinXClusterSchemaVersion, server_, _1, _2),
         .messenger = server_->messenger()};
     tablet::BootstrapTabletData data = {
-      .tablet_init_data = tablet_init_data,
-      .listener = tablet_peer->status_listener(),
-      .append_pool = append_pool(),
-      .allocation_pool = allocation_pool_.get(),
-      .log_sync_pool = log_sync_pool(),
-      .retryable_requests = &retryable_requests,
-      .bootstrap_state_manager = bootstrap_state_manager.get(),
-      .bootstrap_retryable_requests = bootstrap_retryable_requests,
-      .consensus_meta = cmeta.get(),
-      .pre_log_rollover_callback = [peer_weak_ptr, kLogPrefix]() {
-        auto peer = peer_weak_ptr.lock();
-        if (peer) {
-          Status s = peer->SubmitFlushBootstrapStateTask();
-          LOG_IF(WARNING, !s.ok() && !s.IsNotSupported()) << kLogPrefix
-              <<  "Failed to submit retryable requests task: " << s.ToString();
-        }
-      },
+        .tablet_init_data = tablet_init_data,
+        .listener = tablet_peer->status_listener(),
+        .append_pool = append_pool(),
+        .allocation_pool = allocation_pool_.get(),
+        .log_sync_pool = log_sync_pool(),
+        .retryable_requests = &retryable_requests,
+        .bootstrap_state_manager = bootstrap_state_manager.get(),
+        .bootstrap_retryable_requests = bootstrap_retryable_requests,
+        .consensus_meta = cmeta.get(),
+        .pre_log_rollover_callback =
+            [peer_weak_ptr, kLogPrefix]() {
+              auto peer = peer_weak_ptr.lock();
+              if (peer) {
+                Status s = peer->SubmitFlushBootstrapStateTask();
+                LOG_IF(WARNING, !s.ok() && !s.IsNotSupported())
+                    << kLogPrefix << "Failed to submit retryable requests task: " << s.ToString();
+              }
+            },
+        .consistent_time_callback = [peer_weak_ptr]() -> HybridTime {
+          auto peer = peer_weak_ptr.lock();
+          if (peer) {
+            return peer->GetConsistentStreamSafeTime();
+          }
+          return HybridTime::kInitial;
+        },
     };
     s = BootstrapTablet(data, &tablet, &log, &bootstrap_info);
     if (!s.ok()) {
