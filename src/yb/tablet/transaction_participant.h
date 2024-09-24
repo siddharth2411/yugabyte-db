@@ -222,13 +222,17 @@ class TransactionParticipant : public TransactionStatusManager {
 
   std::string DumpTransactions() const;
 
-  void SetIntentRetainOpIdAndTime(const yb::OpId& op_id, const MonoDelta& cdc_sdk_op_id_expiration);
+  void SetIntentRetainOpIdAndTime(
+      const yb::OpId& op_id, const MonoDelta& cdc_sdk_op_id_expiration,
+      const HybridTime& min_start_ht_among_cdcsdk_interested_txns);
 
   OpId GetRetainOpId() const;
 
   CoarseTimePoint GetCheckpointExpirationTime() const;
 
   OpId GetLatestCheckPoint() const;
+
+  HybridTime GetMinStartHTAmongCDCSDKInterestedTxns() const;
 
   HybridTime GetMinStartTimeAmongAllRunningTransactions() const;
 

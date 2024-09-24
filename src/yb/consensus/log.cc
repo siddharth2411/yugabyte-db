@@ -616,7 +616,8 @@ Status Log::Open(const LogOptions &options,
                  scoped_refptr<Log>* log,
                  const PreLogRolloverCallback& pre_log_rollover_callback,
                  NewSegmentAllocationCallback callback,
-                 CreateNewSegment create_new_segment) {
+                 CreateNewSegment create_new_segment,
+                 ConsistentTimeCallback consistent_time_callback) {
   RETURN_NOT_OK_PREPEND(env_util::CreateDirIfMissing(options.env, DirName(wal_dir)),
                         Substitute("Failed to create table wal dir $0", DirName(wal_dir)));
 
@@ -636,7 +637,8 @@ Status Log::Open(const LogOptions &options,
                                      background_sync_threadpool,
                                      callback,
                                      pre_log_rollover_callback,
-                                     create_new_segment));
+                                     create_new_segment,
+                                     consistent_time_callback));
   RETURN_NOT_OK(new_log->Init());
   log->swap(new_log);
   return Status::OK();
@@ -656,7 +658,8 @@ Log::Log(
     ThreadPool* background_sync_threadpool,
     NewSegmentAllocationCallback callback,
     const PreLogRolloverCallback& pre_log_rollover_callback,
-    CreateNewSegment create_new_segment)
+    CreateNewSegment create_new_segment,
+    ConsistentTimeCallback consistent_time_callback)
     : options_(std::move(options)),
       wal_dir_(std::move(wal_dir)),
       tablet_id_(std::move(tablet_id)),
@@ -686,8 +689,9 @@ Log::Log(
       new_segment_allocation_callback_(callback),
       pre_log_rollover_callback_(pre_log_rollover_callback),
       background_synchronizer_wait_state_(
-          ash::WaitStateInfo::CreateIfAshIsEnabled<ash::WaitStateInfo>()) {
-  set_wal_retention_secs(options_.retention_secs);
+          ash::WaitStateInfo::CreateIfAshIsEnabled<ash::WaitStateInfo>()),
+      consistent_time_callback_(consistent_time_callback) {
+  set_wal_retention_secs(options.retention_secs);
   if (table_metric_entity_ && tablet_metric_entity_) {
     metrics_.reset(new LogMetrics(table_metric_entity_, tablet_metric_entity_));
   }
@@ -772,8 +776,15 @@ Status Log::CloseCurrentSegment() {
     VLOG_WITH_PREFIX(1) << "Writing a segment without any REPLICATE message. Segment: "
                         << active_segment_->path();
   }
-  VLOG_WITH_PREFIX(2) << "Segment footer for " << active_segment_->path()
-                      << ": " << footer_builder_.ShortDebugString();
+
+  HybridTime consistent_stream_safe_time = HybridTime::kInitial;
+  if (consistent_time_callback_) {
+    consistent_stream_safe_time = consistent_time_callback_();
+  }
+
+  uint64_t consistent_stream_safe_time_uint64 = consistent_stream_safe_time.ToUint64();
+  consistent_stream_safe_time_.store(consistent_stream_safe_time_uint64, std::memory_order_release);
+  footer_builder_.set_consistent_stream_safe_time(consistent_stream_safe_time_uint64);
 
   auto close_timestamp_micros = GetCurrentTimeMicros();
 
@@ -787,6 +798,8 @@ Status Log::CloseCurrentSegment() {
   }
 
   footer_builder_.set_close_timestamp_micros(close_timestamp_micros);
+  VLOG_WITH_PREFIX(2) << "Segment footer for " << active_segment_->path() << ": "
+                      << footer_builder_.ShortDebugString();
   Status status;
   {
     std::lock_guard lock(active_segment_mutex_);
@@ -1037,6 +1050,15 @@ void Log::UpdateFooterForBatch(LogEntryBatch* batch) {
   if (footer_builder_.has_min_replicate_index()) {
     min_replicate_index_.store(footer_builder_.min_replicate_index(), std::memory_order_release);
   }
+
+  if (footer_builder_.has_max_replicate_index()) {
+    max_replicate_index_.store(footer_builder_.max_replicate_index(), std::memory_order_release);
+  }
+
+  if (footer_builder_.has_consistent_stream_safe_time()) {
+    consistent_stream_safe_time_.store(
+        footer_builder_.consistent_stream_safe_time(), std::memory_order_release);
+  }
 }
 
 Status Log::AllocateSegmentAndRollOver() {
@@ -1104,6 +1126,15 @@ Result<bool> Log::ReuseAsActiveSegment(const scoped_refptr<ReadableLogSegment>& 
   if (footer_builder_.has_min_replicate_index()) {
     min_replicate_index_.store(footer_builder_.min_replicate_index(),
                                std::memory_order_release);
+  }
+
+  if (footer_builder_.has_max_replicate_index()) {
+    max_replicate_index_.store(footer_builder_.max_replicate_index(), std::memory_order_release);
+  }
+
+  if (footer_builder_.has_consistent_stream_safe_time()) {
+    consistent_stream_safe_time_.store(
+        footer_builder_.consistent_stream_safe_time(), std::memory_order_release);
   }
   std::unique_ptr<WritableLogSegment> new_segment(
       new WritableLogSegment(next_segment_path_, next_segment_file_));
@@ -1383,6 +1414,40 @@ Status Log::GetSegmentsToGCUnlocked(int64_t min_op_idx, SegmentSequence* segment
   RETURN_NOT_OK(reader_->GetSegmentPrefixNotIncluding(
       min_op_idx, xrepl_min_replicated_index, segments_to_gc));
 
+  // Find the max consistent stream safe time from the segments that are available for GC.
+  if (segments_to_gc->size() > 0) {
+    HybridTime max_consistent_stream_safe_time = HybridTime::kMin;
+    for (const auto& segment : *segments_to_gc) {
+      if (segment->footer().has_consistent_stream_safe_time()) {
+        HybridTime curr_segment_stream_safe_time =
+            HybridTime(segment->footer().consistent_stream_safe_time());
+        if (curr_segment_stream_safe_time.is_valid() &&
+            curr_segment_stream_safe_time > max_consistent_stream_safe_time) {
+          VLOG_WITH_PREFIX(3) << "Current segment's consistent_stream_safe_time HT: "
+                              << curr_segment_stream_safe_time << "("
+                              << curr_segment_stream_safe_time.ToUint64() << ")"
+                              << ", max_consistent_stream_safe_time HT in current batch: "
+                              << max_consistent_stream_safe_time << "("
+                              << max_consistent_stream_safe_time.ToUint64() << ")";
+          max_consistent_stream_safe_time = curr_segment_stream_safe_time;
+        }
+      }
+    }
+
+    HybridTime curr_max_consistent_stream_safe_time =
+        GetMaxConsistentStreamSafeHTFromGCSegments();
+    if (max_consistent_stream_safe_time != HybridTime::kMin &&
+        (!curr_max_consistent_stream_safe_time.is_valid() ||
+         curr_max_consistent_stream_safe_time < max_consistent_stream_safe_time)) {
+      VLOG_WITH_PREFIX(1) << "Setting max_consistent_stream_safe_ht_from_gc_segments_ to "
+                            << max_consistent_stream_safe_time
+                            << ", previous max_consistent_stream_safe_ht_from_gc_segments_: "
+                            << curr_max_consistent_stream_safe_time;
+      max_consistent_stream_safe_ht_from_gc_segments_.store(
+          max_consistent_stream_safe_time, std::memory_order_release);
+    }
+  }
+
   const auto max_to_delete =
       std::max<ssize_t>(reader_->num_segments() - FLAGS_log_min_segments_to_retain, 0);
   ssize_t segments_to_gc_size = segments_to_gc->size();
@@ -1505,6 +1570,14 @@ yb::OpId Log::GetLatestEntryOpId() const {
 
 int64_t Log::GetMinReplicateIndex() const {
   return min_replicate_index_.load(std::memory_order_acquire);
+}
+
+int64_t Log::GetMaxReplicateIndex() const {
+  return max_replicate_index_.load(std::memory_order_acquire);
+}
+
+uint64_t Log::LoadConsistentStreamSafeTime() const {
+  return consistent_stream_safe_time_.load(std::memory_order_acquire);
 }
 
 yb::OpId Log::WaitForSafeOpIdToApply(const yb::OpId& min_allowed, MonoDelta duration) {
@@ -1685,6 +1758,9 @@ Status Log::Close() {
       RETURN_NOT_OK(DoSync());
       RETURN_NOT_OK(CloseCurrentSegment());
       RETURN_NOT_OK(ReplaceSegmentInReaderUnlocked());
+      // Re-assign the consistent_time_callback_ with an empty function so that the resources
+      // (txn-participant) associated with the original callback can be released.
+      consistent_time_callback_ = {};
       log_state_ = kLogClosed;
       if (background_synchronizer_wait_state_) {
         yb::ash::RaftLogWaitStatesTracker().Untrack(background_synchronizer_wait_state_);
@@ -1970,6 +2046,10 @@ Status Log::SwitchToAllocatedSegment() {
   footer_builder_.Clear();
   footer_builder_.set_num_entries(0);
 
+  uint64_t consistent_stream_safe_time_uint64 = HybridTime::kInvalid.ToUint64();
+  consistent_stream_safe_time_.store(consistent_stream_safe_time_uint64, std::memory_order_release);
+  footer_builder_.set_consistent_stream_safe_time(consistent_stream_safe_time_uint64);
+
   // Set the new segment's schema.
   {
     SharedLock<decltype(schema_lock_)> l(schema_lock_);
@@ -2082,6 +2162,10 @@ Status Log::ResetLastSyncedEntryOpId(const OpId& op_id) {
   LOG_WITH_PREFIX(INFO) << "Reset last synced entry op id from " << old_value << " to " << op_id;
 
   return Status::OK();
+}
+
+HybridTime Log::GetMaxConsistentStreamSafeHTFromGCSegments() const {
+  return max_consistent_stream_safe_ht_from_gc_segments_.load(std::memory_order_acquire);
 }
 
 Log::~Log() {

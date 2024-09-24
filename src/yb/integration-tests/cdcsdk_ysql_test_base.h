@@ -140,7 +140,7 @@ using rpc::RpcController;
 
 namespace cdc {
 
-YB_DEFINE_ENUM(IntentCountCompareOption, (GreaterThanOrEqualTo)(GreaterThan)(EqualTo));
+YB_DEFINE_ENUM(IntentCountCompareOption, (GreaterThanOrEqualTo)(GreaterThan)(EqualTo)(LessThan));
 YB_DEFINE_ENUM(OpIdExpectedValue, (MaxOpId)(InvalidOpId)(ValidNonMaxOpId));
 
 static constexpr uint64_t kVWALSessionId1 = std::numeric_limits<uint64_t>::max() / 2;

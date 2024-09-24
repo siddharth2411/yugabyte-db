@@ -1832,6 +1832,7 @@ Result<string> CDCSDKYsqlTest::GetUniverseId(PostgresMiniCluster* cluster) {
                     << change_resp.cdc_sdk_checkpoint().index();
 
           tablet_to_checkpoint[tablet_ids[i]] = change_resp.cdc_sdk_checkpoint();
+          explicit_checkpoints[tablet_ids[i]] = explicit_cp;
         } else {
           status = StatusFromPB(change_resp.error().status());
           if (status.IsTabletSplit()) {
@@ -2424,6 +2425,8 @@ Result<string> CDCSDKYsqlTest::GetUniverseId(PostgresMiniCluster* cluster) {
               return (*num_intents >= min_expected_num_intents);
             case IntentCountCompareOption::EqualTo:
               return (*num_intents == min_expected_num_intents);
+            case IntentCountCompareOption::LessThan:
+              return (*num_intents < min_expected_num_intents);
           }
 
           return false;
