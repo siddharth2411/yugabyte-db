@@ -1533,18 +1533,8 @@ class TabletBootstrap {
     log::SegmentSequence segments;
     RETURN_NOT_OK(log_->GetSegmentsSnapshot(&segments));
 
-    // If any cdc stream is active for this tablet, we do not want to skip flushed entries.
-    bool should_skip_flushed_entries = FLAGS_skip_flushed_entries;
-    if (should_skip_flushed_entries && tablet_->transaction_participant()) {
-      if (tablet_->transaction_participant()->GetRetainOpId() != OpId::Invalid()) {
-        should_skip_flushed_entries = false;
-        LOG_WITH_PREFIX(WARNING) << "Ignoring skip_flushed_entries even though it is set, because "
-                                 << "we need to scan all segments when any cdc stream is active "
-                                 << "for this tablet.";
-      }
-    }
     // Find the earliest log segment we need to read, so the rest can be ignored.
-    auto iter = should_skip_flushed_entries ? SkipFlushedEntries(&segments) : segments.begin();
+    auto iter = FLAGS_skip_flushed_entries ? SkipFlushedEntries(&segments) : segments.begin();
 
     OpId last_committed_op_id;
     OpId last_read_entry_op_id;
