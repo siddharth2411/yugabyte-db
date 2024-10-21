@@ -1414,6 +1414,7 @@ class TabletBootstrap {
         // requests where last_op_id_in_retryable_requests=OpId::Max().
         // If the first segment is unclosed, it needs read all entries to build footer anyways, so
         // it's also unnecessary to get the starting offset to start replaying.
+        // If any cdc stream is active for this tablet, we will skip the below optimisation.
         const auto first_segment = *iter;
         const auto current_segment_may_contain_unflushed_change_metadata_op =
             is_lazy_superblock_flush_enabled &&
@@ -1421,7 +1422,8 @@ class TabletBootstrap {
         if (FLAGS_skip_flushed_entries_in_first_replayed_segment &&
             is_first_op_id_low_enough_for_retryable_requests &&
             !current_segment_may_contain_unflushed_change_metadata_op &&
-            first_segment->HasLogIndexInFooter()) {
+            first_segment->HasLogIndexInFooter() &&
+            tablet_->transaction_participant()->GetRetainOpId() == OpId::Invalid()) {
           const auto first_op_index_to_replay =
               std::min(op_id_replay_lowest.index, last_op_id_in_retryable_requests.index);
           // Get the offset of the first mandatory op in the segment.

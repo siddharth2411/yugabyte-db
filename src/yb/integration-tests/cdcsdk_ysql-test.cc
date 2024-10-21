@@ -11048,5 +11048,82 @@ TEST_F(CDCSDKYsqlTest, TestIntentsAreDeletedOnTableRemovalFromCDCStream) {
       "Timed out waiting for cleanup of intent entries & intent SST files after CDC consumption"));
 }
 
+TEST_F(CDCSDKYsqlTest, TestGetChangesOnTabletBootstrap) {
+  ANNOTATE_UNPROTECTED_WRITE(FLAGS_yb_enable_cdc_consistent_snapshot_streams) = true;
+  // Lower write buffer to generate higher number of intent SST files.
+  ANNOTATE_UNPROTECTED_WRITE(FLAGS_db_write_buffer_size) = 10;
+  // Delay the trigger for compaction of SST files.
+  ANNOTATE_UNPROTECTED_WRITE(FLAGS_rocksdb_level0_file_num_compaction_trigger) = 1000;
+
+  int num_tservers = 1;
+  ASSERT_OK(SetUpWithParams(num_tservers, /* num_masters */ 1, false));
+
+  auto num_tablets = 1;
+  auto table = ASSERT_RESULT(CreateTable(&test_cluster_, kNamespaceName, kTableName, num_tablets));
+  google::protobuf::RepeatedPtrField<master::TabletLocationsPB> tablets;
+  ASSERT_OK(test_client()->GetTablets(
+      table, 0, &tablets,
+      /* partition_list_version =*/nullptr));
+  ASSERT_EQ(tablets.size(), num_tablets);
+
+  const auto table_id = ASSERT_RESULT(GetTableId(&test_cluster_, kNamespaceName, kTableName));
+  const auto stream_id = ASSERT_RESULT(CreateConsistentSnapshotStream());
+
+  int num_txns = 2000;
+  int num_inserts_per_txn = 2;
+  for (int i = 0; i < num_txns; i++) {
+    ASSERT_OK(WriteRowsHelper(
+        i * num_inserts_per_txn /* start */,
+        (i * num_inserts_per_txn) + num_inserts_per_txn /* end */, &test_cluster_, true));
+  }
+
+  const auto& tablet_id = tablets.Get(0).tablet_id();
+  // Get the intent entries & intent SST files in each peer.
+  std::unordered_map<std::string, std::pair<int64_t, int64_t>>
+      initial_intents_and_intent_sst_file_count;
+  ASSERT_OK(GetIntentEntriesAndSSTFileCountForTablet(
+      tablet_id, &initial_intents_and_intent_sst_file_count));
+  for (const auto& [_, intents] : initial_intents_and_intent_sst_file_count) {
+    auto intent_entries = intents.first;
+    auto intent_sst_files = intents.second;
+    ASSERT_GT(intent_entries, 0);
+    ASSERT_GT(intent_sst_files, 0);
+  }
+
+  auto peers = test_cluster()->GetTabletPeers(0);
+  std::string tablet_peer_id;
+  for (const auto& peer : peers) {
+    if (peer->tablet_id() != tablet_id) {
+      continue;
+    }
+    tablet_peer_id = peer->permanent_uuid();
+    break;
+  }
+
+  TestThreadHolder thread_holder;
+
+  // Thread for writing single-shard transactions.
+  thread_holder.AddThreadFunctor(
+      [&]() {  // Wait for tablet bootstrap to complete on the tablet of CDC's interest.
+        auto log_message = Format("T $0 P $1: Bootstrap complete.", tablet_id, tablet_peer_id);
+        ASSERT_OK(WaitForLogMessage(log_message));
+      });
+
+  // Restart all the nodes.
+  ASSERT_OK(test_cluster()->RestartSync());
+  LOG(INFO) << "All nodes restarted";
+
+  // Wait for all threads to complete.
+  thread_holder.JoinAll();
+  ASSERT_OK(test_cluster()->WaitForAllTabletServers());
+
+  int expected_records_size = num_txns * num_inserts_per_txn;
+  std::map<TabletId, CDCSDKCheckpointPB> tablet_to_checkpoint;
+  auto received_records = ASSERT_RESULT(GetChangeRecordCount(
+      stream_id, table, tablets, tablet_to_checkpoint, expected_records_size, true));
+  LOG(INFO) << "Got " << received_records << " insert records";
+  ASSERT_EQ(expected_records_size, received_records);
+}
+
 }  // namespace cdc
 }  // namespace yb
