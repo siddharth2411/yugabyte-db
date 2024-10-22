@@ -157,6 +157,11 @@ DEFINE_test_flag(bool, dump_docdb_after_tablet_bootstrap, false,
 DEFINE_test_flag(bool, play_pending_uncommitted_entries, false,
                  "Play all the pending entries present in the log even if they are uncommitted.");
 
+DEFINE_NON_RUNTIME_bool(skip_wal_replay_from_beginning_with_cdc, true,
+                        "If true, only replay WAL entries that are not flushed, similar to the "
+                        "non-CDC case. If false, read all the WAL segments starting from the "
+                        "beginning.");
+
 DECLARE_bool(enable_flush_retryable_requests);
 
 namespace yb {
@@ -1422,8 +1427,7 @@ class TabletBootstrap {
         if (FLAGS_skip_flushed_entries_in_first_replayed_segment &&
             is_first_op_id_low_enough_for_retryable_requests &&
             !current_segment_may_contain_unflushed_change_metadata_op &&
-            first_segment->HasLogIndexInFooter() &&
-            tablet_->transaction_participant()->GetRetainOpId() == OpId::Invalid()) {
+            first_segment->HasLogIndexInFooter()) {
           const auto first_op_index_to_replay =
               std::min(op_id_replay_lowest.index, last_op_id_in_retryable_requests.index);
           // Get the offset of the first mandatory op in the segment.
@@ -1535,8 +1539,20 @@ class TabletBootstrap {
     log::SegmentSequence segments;
     RETURN_NOT_OK(log_->GetSegmentsSnapshot(&segments));
 
+    // If any cdc stream is active for this tablet, we do not want to skip flushed entries when
+    // FLAGS_skip_wal_replay_from_beginning_with_cdc is set to false.
+    bool should_skip_flushed_entries = FLAGS_skip_flushed_entries;
+    if (!GetAtomicFlag(&FLAGS_skip_wal_replay_from_beginning_with_cdc) &&
+        should_skip_flushed_entries && tablet_->transaction_participant()) {
+      if (tablet_->transaction_participant()->GetRetainOpId() != OpId::Invalid()) {
+        should_skip_flushed_entries = false;
+        LOG_WITH_PREFIX(WARNING) << "Ignoring skip_flushed_entries even though it is set, because "
+                                 << "we need to scan all segments when any cdc stream is active "
+                                 << "for this tablet.";
+      }
+    }
     // Find the earliest log segment we need to read, so the rest can be ignored.
-    auto iter = FLAGS_skip_flushed_entries ? SkipFlushedEntries(&segments) : segments.begin();
+    auto iter = should_skip_flushed_entries ? SkipFlushedEntries(&segments) : segments.begin();
 
     OpId last_committed_op_id;
     OpId last_read_entry_op_id;
