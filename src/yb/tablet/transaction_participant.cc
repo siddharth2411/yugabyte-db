@@ -666,9 +666,7 @@ class TransactionParticipant::Impl
           if (PREDICT_TRUE(!GetAtomicFlag(&FLAGS_TEST_no_schedule_remove_intents))) {
             (**it).ScheduleRemoveIntents(*it, front.reason);
           }
-        } else if (op_id != OpId::Max()) {
-          // Adding post apply metadata entry will be skipped for applied transactions that are
-          // loaded on bootstrap.
+        } else {
           if (!GetAtomicFlag(&FLAGS_cdc_write_post_apply_metadata) ||
               !GetAtomicFlag(&FLAGS_cdc_immediate_transaction_cleanup)) {
             break;
@@ -1760,9 +1758,7 @@ class TransactionParticipant::Impl
         if (PREDICT_TRUE(!GetAtomicFlag(&FLAGS_TEST_no_schedule_remove_intents))) {
           (**it).ScheduleRemoveIntents(*it, reason);
         }
-      } else if (op_id != OpId::Max()) {
-        // Adding post apply metadata entry will be skipped for applied transactions that are
-        // loaded on bootstrap.
+      } else {
         if (!GetAtomicFlag(&FLAGS_cdc_write_post_apply_metadata) ||
             !GetAtomicFlag(&FLAGS_cdc_immediate_transaction_cleanup)) {
           remove_transaction = false;
@@ -1905,6 +1901,13 @@ class TransactionParticipant::Impl
                           << pending_apply->ToString();
       txn->SetLocalCommitData(pending_apply->commit_ht, pending_apply->state.aborted);
       txn->SetApplyData(pending_apply->state);
+    }
+    // All transactions loaded during tablet bootstrap do not have an apply OpID. However, these
+    // transactions may still be needed by CDC (if enabled). To prevent unintended cleanup of
+    // intents for such transactions when CDC is active, apply OpId is set to OpId::Max. Once CDC
+    // stream these txns, their intents will be cleaned up by the intent SST file cleanup codepath.
+    if(GetLatestCheckPointUnlocked() != OpId::Max()) {
+      txn->SetApplyOpId(OpId::Max());
     }
     transactions_.insert(txn);
     mem_tracker_->Consume(kRunningTransactionSize);
