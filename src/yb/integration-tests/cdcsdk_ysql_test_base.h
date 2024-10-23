@@ -56,7 +56,6 @@
 #include "yb/util/result.h"
 #include "yb/util/sync_point.h"
 #include "yb/util/test_macros.h"
-#include "yb/util/test_thread_holder.h"
 #include "yb/tablet/tablet_types.pb.h"
 
 #include "yb/yql/pgwrapper/libpq_utils.h"
@@ -849,8 +848,6 @@ class CDCSDKYsqlTest : public CDCSDKTestBase {
   Status GetIntentEntriesAndSSTFileCountForTablet(
       const TabletId& tablet_id, std::unordered_map<std::string, std::pair<int64_t, int64_t>>*
                                         initial_intents_and_intent_sst_file_count);
-
-  Status WaitForLogMessage(const std::string& message);
 };
 
 }  // namespace cdc
