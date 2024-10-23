@@ -11139,5 +11139,97 @@ TEST_F(CDCSDKYsqlTest, TestGetChangesOnTabletBootstrap) {
   ASSERT_EQ(expected_records_size, received_records);
 }
 
+TEST_F(CDCSDKYsqlTest, TestBootstrapReplayOpId) {
+  ANNOTATE_UNPROTECTED_WRITE(FLAGS_yb_enable_cdc_consistent_snapshot_streams) = true;
+  // Lower write buffer to generate higher number of intent SST files.
+  ANNOTATE_UNPROTECTED_WRITE(FLAGS_db_write_buffer_size) = 1;
+  ANNOTATE_UNPROTECTED_WRITE(FLAGS_log_segment_size_bytes) = 5000;
+  // Delay the trigger for compaction of SST files.
+  ANNOTATE_UNPROTECTED_WRITE(FLAGS_rocksdb_level0_file_num_compaction_trigger) = 100;
+
+  int num_tservers = 1;
+  ASSERT_OK(SetUpWithParams(num_tservers, /* num_masters */ 1, false));
+
+  auto num_tablets = 1;
+  auto table = ASSERT_RESULT(CreateTable(&test_cluster_, kNamespaceName, kTableName, num_tablets));
+  google::protobuf::RepeatedPtrField<master::TabletLocationsPB> tablets;
+  ASSERT_OK(test_client()->GetTablets(
+      table, 0, &tablets,
+      /* partition_list_version =*/nullptr));
+  ASSERT_EQ(tablets.size(), num_tablets);
+
+  const auto table_id = ASSERT_RESULT(GetTableId(&test_cluster_, kNamespaceName, kTableName));
+  ASSERT_RESULT(CreateConsistentSnapshotStream());
+
+  int inserts_and_restart = 10;
+  int curr_idx = 0;
+  int num_txns = 100;
+  int num_inserts_per_txn = 2;
+  while (curr_idx < inserts_and_restart) {
+    LOG(INFO) << "starting inserts & restart";
+    for (int i = curr_idx * num_txns; i < (curr_idx + 1) * num_txns; i++) {
+      ASSERT_OK(WriteRowsHelper(
+          i * num_inserts_per_txn /* start */,
+          (i * num_inserts_per_txn) + num_inserts_per_txn /* end */, &test_cluster_, true));
+    }
+
+    ASSERT_OK(WaitForFlushTables(
+        {table.table_id()}, /* add_indexes = */ false, /* timeout_secs = */ 100,
+        /* is_compaction = */ false));
+
+    const auto& tablet_id = tablets.Get(0).tablet_id();
+    std::unordered_map<std::string, size_t> log_segment_count;
+    LOG(INFO) << "sid: log segments before restart";
+    GetLogSegmentCountForTablet(tablet_id, &log_segment_count);
+    // Get the intent entries & intent SST files in each peer.
+    std::unordered_map<std::string, std::pair<int64_t, int64_t>>
+        initial_intents_and_intent_sst_file_count;
+    LOG(INFO) << "sid: intent count before restart";
+    ASSERT_OK(GetIntentEntriesAndSSTFileCountForTablet(
+        tablet_id, &initial_intents_and_intent_sst_file_count));
+
+    // Restart all the nodes.
+    ASSERT_OK(test_cluster()->RestartSync());
+    LOG(INFO) << "All nodes restarted";
+    ASSERT_OK(test_cluster()->WaitForAllTabletServers());
+
+    // On bootstrap, some txns will be loaded in memory which are already applied. These will be
+    // removed once their txn status is checked. Intent count once all txns are removed should still
+    // be equal to the count before the restart as CDC has not consumed anything.
+    ASSERT_OK(WaitFor(
+        [&]() -> Result<bool> {
+          for (const auto& peer : test_cluster()->GetTabletPeers(num_tservers - 1)) {
+            if (peer->tablet_id() != tablet_id) {
+              continue;
+            }
+            auto tablet = VERIFY_RESULT(peer->shared_tablet_safe());
+            auto running_txns = tablet->transaction_participant()->GetNumRunningTransactions();
+            if (running_txns != 0) {
+              LOG(INFO) << "Running txns: " << running_txns;
+              return false;
+            }
+          }
+          return true;
+        },
+        MonoDelta::FromSeconds(60), "Timed out waiting for running txns to reduce to 0"));
+
+    LOG(INFO) << "sid: log segments after restart";
+    log_segment_count.clear();
+    GetLogSegmentCountForTablet(tablet_id, &log_segment_count);
+    std::unordered_map<std::string, std::pair<int64_t, int64_t>>
+        intents_and_intent_sst_file_count_after_restart;
+    LOG(INFO) << "sid: intent count after restart";
+    ASSERT_OK(GetIntentEntriesAndSSTFileCountForTablet(
+        tablet_id, &intents_and_intent_sst_file_count_after_restart));
+    for (const auto& [peer, intents] : intents_and_intent_sst_file_count_after_restart) {
+      auto intent_entries = intents.first;
+      auto intent_sst_files = intents.second;
+      ASSERT_EQ(intent_entries, initial_intents_and_intent_sst_file_count[peer].first);
+      ASSERT_EQ(intent_sst_files, initial_intents_and_intent_sst_file_count[peer].second);
+    }
+    curr_idx++;
+  }
+}
+
 }  // namespace cdc
 }  // namespace yb
