@@ -158,9 +158,8 @@ DEFINE_test_flag(bool, play_pending_uncommitted_entries, false,
                  "Play all the pending entries present in the log even if they are uncommitted.");
 
 DEFINE_NON_RUNTIME_bool(skip_wal_replay_from_beginning_with_cdc, true,
-                        "If true, only replay WAL entries that are not flushed, similar to the "
-                        "non-CDC case. If false, read all the WAL segments starting from the "
-                        "beginning.");
+                        "If false, read all the WAL segments starting from the "
+                        "beginning instead of starting post the flushed entries.");
 
 DECLARE_bool(enable_flush_retryable_requests);
 
